@@ -539,3 +539,403 @@ class FVPostProcessor:
                 convergence['errors_Linf'].append(Linf_error)
                 
         return convergence
+
+    def plot_centerlines_from_history(self, centerline_history, hotspot_params=None, 
+                                    show_mesh_lines=False):
+        """
+        Plot centerlines from collected history data.
+        
+        Parameters
+        ----------
+        centerline_history : dict
+            History data from solver.get_centerline_history()
+        hotspot_params : dict, optional
+            Hotspot parameters for overlay
+        show_mesh_lines : bool
+            Show mesh grid lines
+            
+        Returns
+        -------
+        fig, axes : matplotlib objects
+        """
+        import matplotlib.pyplot as plt
+        
+        if centerline_history is None:
+            raise ValueError("No centerline history data available")
+            
+        # Extract data
+        times = centerline_history['times']
+        x_data = centerline_history['x_centerline']
+        y_data = centerline_history['y_centerline']
+        x_coords = centerline_history['x_coords']
+        y_coords = centerline_history['y_coords']
+        
+        # Create figure
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+        
+        # Create colormap for time evolution
+        colors = plt.cm.viridis(np.linspace(0, 1, len(times)))
+        
+        # Plot X-centerline evolution
+        for idx, (t, color) in enumerate(zip(times, colors)):
+            # Format time label
+            if t < 1e-6:
+                label = f't = {t*1e9:.1f} ns'
+            elif t < 1e-3:
+                label = f't = {t*1e6:.1f} μs'
+            elif t < 1:
+                label = f't = {t*1e3:.1f} ms'
+            else:
+                label = f't = {t:.3f} s'
+                
+            ax1.plot(x_coords, x_data[idx], color=color, linewidth=2, label=label)
+        
+        # Add mesh lines if requested
+        if show_mesh_lines:
+            for i in range(self.mesh.nx + 1):
+                ax1.axvline(x=self.mesh.x_faces[i], color='gray', 
+                           linewidth=0.5, alpha=0.3)
+        
+        # Add hotspot markers if provided
+        if hotspot_params is not None:
+            center_x = hotspot_params.get('center_x', self.mesh.plate_length/2)
+            center_y = hotspot_params.get('center_y', self.mesh.plate_width/2)
+            radius = hotspot_params.get('radius', 0.05)
+            
+            # For x-centerline at y = plate_width/2
+            y_center = self.mesh.plate_width / 2
+            if abs(y_center - center_y) <= radius:
+                dy = y_center - center_y
+                dx = np.sqrt(radius**2 - dy**2)
+                x_left = center_x - dx
+                x_right = center_x + dx
+                
+                ax1.axvspan(x_left, x_right, alpha=0.1, color='red')
+                ax1.axvline(x=x_left, color='green', linewidth=1.5, 
+                           linestyle='--', alpha=0.5)
+                ax1.axvline(x=x_right, color='green', linewidth=1.5, 
+                           linestyle='--', alpha=0.5)
+        
+        ax1.set_xlabel('X Position (m)', fontsize=12)
+        ax1.set_ylabel('Temperature (K)', fontsize=12)
+        ax1.set_title(f'Temperature Evolution along X-Centerline (y = {self.mesh.plate_width/2:.3f} m)', 
+                     fontsize=14)
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # Plot Y-centerline evolution
+        for idx, (t, color) in enumerate(zip(times, colors)):
+            # Format time label
+            if t < 1e-6:
+                label = f't = {t*1e9:.1f} ns'
+            elif t < 1e-3:
+                label = f't = {t*1e6:.1f} μs'
+            elif t < 1:
+                label = f't = {t*1e3:.1f} ms'
+            else:
+                label = f't = {t:.3f} s'
+                
+            ax2.plot(y_coords, y_data[idx], color=color, linewidth=2, label=label)
+        
+        # Add mesh lines if requested
+        if show_mesh_lines:
+            for j in range(self.mesh.ny + 1):
+                ax2.axvline(x=self.mesh.y_faces[j], color='gray', 
+                           linewidth=0.5, alpha=0.3)
+        
+        # Add hotspot markers if provided
+        if hotspot_params is not None:
+            # For y-centerline at x = plate_length/2
+            x_center = self.mesh.plate_length / 2
+            if abs(x_center - center_x) <= radius:
+                dx = x_center - center_x
+                dy = np.sqrt(radius**2 - dx**2)
+                y_bottom = center_y - dy
+                y_top = center_y + dy
+                
+                ax2.axvspan(y_bottom, y_top, alpha=0.1, color='red')
+                ax2.axvline(x=y_bottom, color='green', linewidth=1.5, 
+                           linestyle='--', alpha=0.5)
+                ax2.axvline(x=y_top, color='green', linewidth=1.5, 
+                           linestyle='--', alpha=0.5)
+        
+        ax2.set_xlabel('Y Position (m)', fontsize=12)
+        ax2.set_ylabel('Temperature (K)', fontsize=12)
+        ax2.set_title(f'Temperature Evolution along Y-Centerline (x = {self.mesh.plate_length/2:.3f} m)', 
+                     fontsize=14)
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        plt.tight_layout()
+        return fig, (ax1, ax2)
+    
+    def plot_centerlines(self, solver, direction='both', time_label=None, ax=None, 
+                        show_mesh_lines=False, show_hotspot_marker=False, hotspot_params=None):
+        """
+        Plot temperature along centerlines.
+        
+        Parameters
+        ----------
+        solver : FVHeatSolver
+            Solver object
+        direction : str
+            'x', 'y', or 'both'
+        time_label : str, optional
+            Time label for the plot
+        ax : matplotlib axes, optional
+            Axes to plot on (creates new if None)
+        show_mesh_lines : bool
+            Show vertical lines at cell boundaries
+        show_hotspot_marker : bool
+            Mark hotspot boundaries on centerline
+        hotspot_params : dict
+            Hotspot parameters (center_x, center_y, radius)
+            
+        Returns
+        -------
+        fig, ax : matplotlib objects
+            Figure and axes (only fig if ax was provided)
+        """
+        import matplotlib.pyplot as plt
+        
+        # Create axes if needed
+        if ax is None:
+            if direction == 'both':
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+            else:
+                fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+                ax1 = ax if direction == 'x' else None
+                ax2 = ax if direction == 'y' else None
+        else:
+            fig = ax.figure
+            if direction == 'both':
+                raise ValueError("Cannot plot both directions on single provided axes")
+            ax1 = ax if direction == 'x' else None
+            ax2 = ax if direction == 'y' else None
+        
+        # Time label
+        if time_label is None:
+            time_label = f't = {solver.current_time:.3f} s'
+        
+        # Plot x-centerline
+        if direction in ['x', 'both']:
+            x_coords, T_x = self.extract_centerline_data(solver.T, 'x')
+            ax1.plot(x_coords, T_x, 'b-', linewidth=2, label=time_label)
+            
+            # Add mesh lines
+            if show_mesh_lines:
+                for i in range(self.mesh.nx + 1):
+                    ax1.axvline(x=self.mesh.x_faces[i], color='gray', 
+                               linewidth=0.5, alpha=0.3)
+            
+            # Add hotspot markers
+            if show_hotspot_marker and hotspot_params is not None:
+                center_x = hotspot_params.get('center_x', self.mesh.plate_length/2)
+                center_y = hotspot_params.get('center_y', self.mesh.plate_width/2)
+                radius = hotspot_params.get('radius', 0.05)
+                
+                # For x-centerline, we're at y = plate_width/2
+                y_center_line = self.mesh.plate_width / 2
+                
+                # Check if centerline passes through hotspot
+                if abs(y_center_line - center_y) <= radius:
+                    # Calculate x-intersections
+                    dy = y_center_line - center_y
+                    dx = np.sqrt(radius**2 - dy**2)
+                    x_left = center_x - dx
+                    x_right = center_x + dx
+                    
+                    # Mark boundaries
+                    ax1.axvline(x=x_left, color='green', linewidth=2, 
+                               linestyle='--', alpha=0.7, label='Hotspot boundary')
+                    ax1.axvline(x=x_right, color='green', linewidth=2, 
+                               linestyle='--', alpha=0.7)
+                    
+                    # Shade hotspot region
+                    ax1.axvspan(x_left, x_right, alpha=0.1, color='red', 
+                               label='Initial hotspot region')
+            
+            ax1.set_xlabel('X Position (m)', fontsize=12)
+            ax1.set_ylabel('Temperature (K)', fontsize=12)
+            ax1.set_title(f'Temperature along X-Centerline (y = {self.mesh.plate_width/2:.3f} m)', 
+                         fontsize=14)
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+        
+        # Plot y-centerline
+        if direction in ['y', 'both']:
+            y_coords, T_y = self.extract_centerline_data(solver.T, 'y')
+            ax2.plot(y_coords, T_y, 'r-', linewidth=2, label=time_label)
+            
+            # Add mesh lines
+            if show_mesh_lines:
+                for j in range(self.mesh.ny + 1):
+                    ax2.axvline(x=self.mesh.y_faces[j], color='gray', 
+                               linewidth=0.5, alpha=0.3)
+            
+            # Add hotspot markers
+            if show_hotspot_marker and hotspot_params is not None:
+                center_x = hotspot_params.get('center_x', self.mesh.plate_length/2)
+                center_y = hotspot_params.get('center_y', self.mesh.plate_width/2)
+                radius = hotspot_params.get('radius', 0.05)
+                
+                # For y-centerline, we're at x = plate_length/2
+                x_center_line = self.mesh.plate_length / 2
+                
+                # Check if centerline passes through hotspot
+                if abs(x_center_line - center_x) <= radius:
+                    # Calculate y-intersections
+                    dx = x_center_line - center_x
+                    dy = np.sqrt(radius**2 - dx**2)
+                    y_bottom = center_y - dy
+                    y_top = center_y + dy
+                    
+                    # Mark boundaries
+                    ax2.axvline(x=y_bottom, color='green', linewidth=2, 
+                               linestyle='--', alpha=0.7, label='Hotspot boundary')
+                    ax2.axvline(x=y_top, color='green', linewidth=2, 
+                               linestyle='--', alpha=0.7)
+                    
+                    # Shade hotspot region
+                    ax2.axvspan(y_bottom, y_top, alpha=0.1, color='red', 
+                               label='Initial hotspot region')
+            
+            ax2.set_xlabel('Y Position (m)', fontsize=12)
+            ax2.set_ylabel('Temperature (K)', fontsize=12)
+            ax2.set_title(f'Temperature along Y-Centerline (x = {self.mesh.plate_length/2:.3f} m)', 
+                         fontsize=14)
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+        
+        plt.tight_layout()
+        
+        if ax is None:
+            return fig, (ax1, ax2) if direction == 'both' else (ax1 if direction == 'x' else ax2)
+        else:
+            return fig
+    
+    def plot_centerlines_evolution(self, solver_states, times, direction='both',
+                                 show_mesh_lines=False, show_hotspot_marker=False,
+                                 hotspot_params=None):
+        """
+        Plot centerline temperature evolution at multiple times.
+        
+        Parameters
+        ----------
+        solver_states : list
+            List of solver states (each containing T field)
+        times : list
+            Corresponding time values
+        direction : str
+            'x', 'y', or 'both'
+        show_mesh_lines : bool
+            Show cell boundaries
+        show_hotspot_marker : bool
+            Mark initial hotspot region
+        hotspot_params : dict
+            Hotspot parameters
+            
+        Returns
+        -------
+        fig, axes : matplotlib objects
+        """
+        import matplotlib.pyplot as plt
+        
+        # Create figure
+        if direction == 'both':
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+        else:
+            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+            ax1 = ax if direction == 'x' else None
+            ax2 = ax if direction == 'y' else None
+        
+        # Color map for different times
+        colors = plt.cm.viridis(np.linspace(0, 1, len(times)))
+        
+        # Plot each time
+        for idx, (state, t, color) in enumerate(zip(solver_states, times, colors)):
+            # Time label
+            if t < 1e-6:
+                time_label = f't = {t*1e9:.1f} ns'
+            elif t < 1e-3:
+                time_label = f't = {t*1e6:.1f} μs'
+            elif t < 1:
+                time_label = f't = {t*1e3:.1f} ms'
+            else:
+                time_label = f't = {t:.3f} s'
+            
+            # X-centerline
+            if direction in ['x', 'both']:
+                x_coords, T_x = self.extract_centerline_data(state['T'], 'x')
+                ax1.plot(x_coords, T_x, color=color, linewidth=2, label=time_label)
+            
+            # Y-centerline
+            if direction in ['y', 'both']:
+                y_coords, T_y = self.extract_centerline_data(state['T'], 'y')
+                ax2.plot(y_coords, T_y, color=color, linewidth=2, label=time_label)
+        
+        # Add mesh lines and hotspot markers (only once)
+        if show_mesh_lines:
+            if direction in ['x', 'both']:
+                for i in range(self.mesh.nx + 1):
+                    ax1.axvline(x=self.mesh.x_faces[i], color='gray', 
+                               linewidth=0.5, alpha=0.3)
+            if direction in ['y', 'both']:
+                for j in range(self.mesh.ny + 1):
+                    ax2.axvline(x=self.mesh.y_faces[j], color='gray', 
+                               linewidth=0.5, alpha=0.3)
+        
+        if show_hotspot_marker and hotspot_params is not None:
+            center_x = hotspot_params.get('center_x', self.mesh.plate_length/2)
+            center_y = hotspot_params.get('center_y', self.mesh.plate_width/2)
+            radius = hotspot_params.get('radius', 0.05)
+            
+            # X-centerline hotspot
+            if direction in ['x', 'both']:
+                y_center_line = self.mesh.plate_width / 2
+                if abs(y_center_line - center_y) <= radius:
+                    dy = y_center_line - center_y
+                    dx = np.sqrt(radius**2 - dy**2)
+                    x_left = center_x - dx
+                    x_right = center_x + dx
+                    ax1.axvspan(x_left, x_right, alpha=0.1, color='red')
+                    ax1.axvline(x=x_left, color='green', linewidth=1.5, 
+                               linestyle='--', alpha=0.5)
+                    ax1.axvline(x=x_right, color='green', linewidth=1.5, 
+                               linestyle='--', alpha=0.5)
+            
+            # Y-centerline hotspot
+            if direction in ['y', 'both']:
+                x_center_line = self.mesh.plate_length / 2
+                if abs(x_center_line - center_x) <= radius:
+                    dx = x_center_line - center_x
+                    dy = np.sqrt(radius**2 - dx**2)
+                    y_bottom = center_y - dy
+                    y_top = center_y + dy
+                    ax2.axvspan(y_bottom, y_top, alpha=0.1, color='red')
+                    ax2.axvline(x=y_bottom, color='green', linewidth=1.5, 
+                               linestyle='--', alpha=0.5)
+                    ax2.axvline(x=y_top, color='green', linewidth=1.5, 
+                               linestyle='--', alpha=0.5)
+        
+        # Format axes
+        if direction in ['x', 'both']:
+            ax1.set_xlabel('X Position (m)', fontsize=12)
+            ax1.set_ylabel('Temperature (K)', fontsize=12)
+            ax1.set_title(f'Temperature Evolution along X-Centerline (y = {self.mesh.plate_width/2:.3f} m)', 
+                         fontsize=14)
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(loc='best')
+        
+        if direction in ['y', 'both']:
+            ax2.set_xlabel('Y Position (m)', fontsize=12)
+            ax2.set_ylabel('Temperature (K)', fontsize=12)
+            ax2.set_title(f'Temperature Evolution along Y-Centerline (x = {self.mesh.plate_length/2:.3f} m)', 
+                         fontsize=14)
+            ax2.grid(True, alpha=0.3)
+            ax2.legend(loc='best')
+        
+        plt.tight_layout()
+        return fig, (ax1, ax2) if direction == 'both' else (ax1 if direction == 'x' else ax2)
+    
+    

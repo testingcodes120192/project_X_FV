@@ -13,7 +13,7 @@ from mesh import FVMesh
 from solver import FVHeatSolver
 from postprocessor import FVPostProcessor
 from initial_conditions import get_fv_initial_condition
-from animation import create_fv_animation, plot_fv_solution_snapshots
+from animation import create_fv_animation_from_history, plot_fv_solution_snapshots, plot_convergence_study
 from simple_amr import SimpleAMR
 
 class FVHeatSimulatorGUI:
@@ -60,6 +60,9 @@ class FVHeatSimulatorGUI:
         
         # Load default configuration
         self.load_config('config_fv.ini')
+        
+        # Track simulation state
+        self.simulation_running = False
         
     def setup_variables(self):
         """Initialize all GUI variables."""
@@ -118,6 +121,7 @@ class FVHeatSimulatorGUI:
         self.var_T_max_fixed = tk.DoubleVar(value=6000.0)
         self.var_show_mesh = tk.BooleanVar(value=False)
         self.var_show_hotspot = tk.BooleanVar(value=False)
+        self.var_show_centerlines = tk.BooleanVar(value=False)
         
     def create_simulation_tab(self):
         """Create simulation settings tab."""
@@ -400,61 +404,46 @@ Note: AMR is experimental in this implementation.
         ttk.Label(tab, text="Plot Points (Y):").grid(row=2, column=0, sticky='e', padx=5, pady=5)
         ttk.Entry(tab, textvariable=self.var_ny_plot, width=15).grid(row=2, column=1, sticky='w', padx=5)
         
-        ttk.Label(tab, text="Mesh Visualization", font=('TkDefaultFont', 10, 'bold')).grid(
+        ttk.Label(tab, text="Visualization Options", font=('TkDefaultFont', 10, 'bold')).grid(
             row=3, column=0, columnspan=2, pady=10)
         
-        ttk.Checkbutton(tab, text="Show Mesh Lines", 
-                       variable=self.var_show_mesh).grid(row=4, column=0, columnspan=2, pady=5)
+        self.show_mesh_check = ttk.Checkbutton(tab, text="Show Mesh Lines", 
+                                              variable=self.var_show_mesh)
+        self.show_mesh_check.grid(row=4, column=0, columnspan=2, pady=5)
         
-        ttk.Checkbutton(tab, text="Show Initial Hotspot Boundary", 
-                       variable=self.var_show_hotspot).grid(row=5, column=0, columnspan=2, pady=5)
+        self.show_hotspot_check = ttk.Checkbutton(tab, text="Show Initial Hotspot Boundary", 
+                                                 variable=self.var_show_hotspot)
+        self.show_hotspot_check.grid(row=5, column=0, columnspan=2, pady=5)
+        
+        self.show_centerlines_check = ttk.Checkbutton(tab, text="Plot Centerline Temperatures", 
+                                                     variable=self.var_show_centerlines)
+        self.show_centerlines_check.grid(row=6, column=0, columnspan=2, pady=5)
+        
+        ttk.Label(tab, text="Note: Centerline data collected during simulation", 
+                 font=('TkDefaultFont', 8, 'italic')).grid(row=7, column=0, columnspan=2)
         
         ttk.Label(tab, text="Animation Settings", font=('TkDefaultFont', 10, 'bold')).grid(
-            row=6, column=0, columnspan=2, pady=10)
+            row=8, column=0, columnspan=2, pady=10)
         
-        ttk.Checkbutton(tab, text="Create Animation", 
-                       variable=self.var_create_animation).grid(row=7, column=0, columnspan=2, pady=5)
+        self.create_animation_check = ttk.Checkbutton(tab, text="Create Animation", 
+                                                     variable=self.var_create_animation)
+        self.create_animation_check.grid(row=9, column=0, columnspan=2, pady=5)
         
-        ttk.Label(tab, text="Frame Skip:").grid(row=8, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(tab, textvariable=self.var_frame_skip, width=15).grid(row=8, column=1, sticky='w', padx=5)
+        ttk.Label(tab, text="Frame Skip:").grid(row=10, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(tab, textvariable=self.var_frame_skip, width=15).grid(row=10, column=1, sticky='w', padx=5)
         
         ttk.Checkbutton(tab, text="Save Animation", 
-                       variable=self.var_save_animation).grid(row=9, column=0, columnspan=2, pady=5)
+                       variable=self.var_save_animation).grid(row=11, column=0, columnspan=2, pady=5)
         
         ttk.Label(tab, text="Temperature Range", font=('TkDefaultFont', 10, 'bold')).grid(
-            row=10, column=0, columnspan=2, pady=10)
+            row=12, column=0, columnspan=2, pady=10)
         
-        ttk.Label(tab, text="T Min (K):").grid(row=11, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(tab, textvariable=self.var_T_min_fixed, width=15).grid(row=11, column=1, sticky='w', padx=5)
+        ttk.Label(tab, text="T Min (K):").grid(row=13, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(tab, textvariable=self.var_T_min_fixed, width=15).grid(row=13, column=1, sticky='w', padx=5)
         
-        ttk.Label(tab, text="T Max (K):").grid(row=12, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(tab, textvariable=self.var_T_max_fixed, width=15).grid(row=12, column=1, sticky='w', padx=5)
+        ttk.Label(tab, text="T Max (K):").grid(row=14, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(tab, textvariable=self.var_T_max_fixed, width=15).grid(row=14, column=1, sticky='w', padx=5)
         
-    def update_resolution_info(self, *args):
-        """Update resolution information display."""
-        try:
-            nx = self.var_nx_cells.get()
-            ny = self.var_ny_cells.get()
-            total_cells = nx * ny
-            
-            self.resolution_label.config(
-                text=f"Total cells: {total_cells:,} ({nx}×{ny})"
-            )
-            
-            # Estimate memory usage (rough)
-            # Each cell needs ~8 bytes (double) + ghost cells
-            memory_mb = total_cells * 8 * 2 / 1024 / 1024  # Factor of 2 for T and T_old
-            if memory_mb < 1:
-                self.resolution_label.config(
-                    text=f"Total cells: {total_cells:,} ({nx}×{ny}) - Memory: <1 MB"
-                )
-            else:
-                self.resolution_label.config(
-                    text=f"Total cells: {total_cells:,} ({nx}×{ny}) - Memory: ~{memory_mb:.1f} MB"
-                )
-        except:
-            pass
-    
     def update_resolution_info(self, *args):
         """Update resolution information display."""
         try:
@@ -709,8 +698,6 @@ Note: AMR is experimental in this implementation.
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to create mesh preview:\n{str(e)}")
- 
-    
             
     def update_ic_options(self, event=None):
         """Show/hide IC options based on type."""
@@ -809,6 +796,7 @@ Note: AMR is experimental in this implementation.
             'T_max_fixed': self.var_T_max_fixed.get(),
             'show_mesh': self.var_show_mesh.get(),
             'show_hotspot': self.var_show_hotspot.get(),
+            'show_centerlines': self.var_show_centerlines.get(),
         }
         
         return config
@@ -837,12 +825,42 @@ Note: AMR is experimental in this implementation.
             # Add other sections...
         except Exception as e:
             print(f"Error loading config: {e}")
+    
+    def disable_controls_during_simulation(self):
+        """Disable all controls during simulation."""
+        self.simulation_running = True
+        self.run_button.config(state='disabled')
+        
+        # Disable all tabs
+        for i in range(self.notebook.index('end')):
+            self.notebook.tab(i, state='disabled')
+            
+        # Disable visualization checkboxes that affect simulation
+        self.show_centerlines_check.config(state='disabled')
+        self.create_animation_check.config(state='disabled')
+            
+    def enable_controls_after_simulation(self):
+        """Re-enable controls after simulation."""
+        self.simulation_running = False
+        self.run_button.config(state='normal')
+        
+        # Enable all tabs
+        for i in range(self.notebook.index('end')):
+            self.notebook.tab(i, state='normal')
+            
+        # Re-enable visualization checkboxes
+        self.show_centerlines_check.config(state='normal')
+        self.create_animation_check.config(state='normal')
             
     def run_simulation(self):
-        """Run the FV simulation."""
+        """Run the FV simulation with single computation pass."""
+        if self.simulation_running:
+            messagebox.showwarning("Warning", "Simulation already running!")
+            return
+            
         self.status_label.config(text="Running simulation...")
         self.progress.start()
-        self.run_button.config(state='disabled')
+        self.disable_controls_during_simulation()
         
         try:
             # Get configuration
@@ -859,6 +877,8 @@ Note: AMR is experimental in this implementation.
             print(f"Reactions: {'Enabled' if config['enable_reactions'] else 'Disabled'}")
             print(f"AMR: {'Enabled' if config['enable_amr'] else 'Disabled'}")
             print(f"Simulation time: {config['total_time']} s")
+            print(f"Centerline collection: {'Enabled' if config['show_centerlines'] else 'Disabled'}")
+            print(f"Animation creation: {'Enabled' if config['create_animation'] else 'Disabled'}")
             print("="*50 + "\n")
             
             # Create mesh
@@ -877,6 +897,11 @@ Note: AMR is experimental in this implementation.
                 time_integration=config['time_integration'],
                 enable_reactions=config['enable_reactions']
             )
+            
+            # Enable centerline collection if requested
+            if config['show_centerlines']:
+                solver.enable_centerline_collection(True)
+                print("Centerline data collection enabled")
             
             # Set initial condition
             ic_params = {
@@ -920,13 +945,18 @@ Note: AMR is experimental in this implementation.
             else:
                 dt = solver.compute_stable_timestep(config['cfl'])
                 print(f"Auto-computed time step: {dt:.3e} s")
-                
-            # Plot solution at specified times
-            time_points = config['time_points']
             
+            # Print some diagnostics
+            print(f"\nSimulation parameters:")
+            print(f"  Thermal diffusivity α = {config['alpha']:.2e} m²/s")
+            print(f"  Cell size: Δx = {mesh.dx:.3e} m, Δy = {mesh.dy:.3e} m")
+            print(f"  Time step: Δt = {dt:.3e} s")
+            print(f"  Diffusion number: α*Δt/Δx² = {config['alpha']*dt/mesh.dx**2:.3f}")
+            print(f"  Expected diffusion length at t=10s: L ≈ √(4αt) = {np.sqrt(4*config['alpha']*10):.3f} m")
+                
             # Get hotspot parameters for visualization
             hotspot_params = None
-            if config['ic_type'] == 'circular' and config.get('show_hotspot', False):
+            if config['ic_type'] == 'circular' and (config.get('show_hotspot', False) or config.get('show_centerlines', False)):
                 hotspot_params = {
                     'center_x': config['center_x'],
                     'center_y': config['center_y'],
@@ -942,37 +972,101 @@ Note: AMR is experimental in this implementation.
                     hotspot_params=hotspot_params
                 )
                 plt.show()
+            
+            # Main simulation loop
+            time_points = config['time_points']
+            solution_snapshots = []
+            
+            # Store initial solution
+            print("Storing initial solution...")
+            sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+            solution_snapshots.append((0.0, sol))
+            
+            # Prepare for animation if requested
+            animation_frames = []
+            if config['create_animation']:
+                # Store initial frame
+                frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
+                frame_data['time'] = 0.0
+                animation_frames.append(frame_data)
+            
+            # Run simulation to each time point and collect data
+            print("\nRunning simulation...")
+            for i, target_time in enumerate(time_points[1:]):
+                print(f"\nAdvancing to t = {target_time} s")
                 
-            fig = plot_fv_solution_snapshots(
-                solver, postprocessor, time_points,
-                nx_plot=config['nx_plot'],
-                ny_plot=config['ny_plot'],
+                # For animation, collect frames during advancement
+                if config['create_animation']:
+                    # Calculate intermediate frame times
+                    current_time = solver.current_time
+                    frame_dt = dt * config['frame_skip']
+                    frame_times = np.arange(current_time + frame_dt, target_time, frame_dt)
+                    
+                    # Advance to each frame time
+                    for frame_time in frame_times:
+                        solver.advance_to_time(frame_time, dt, show_progress=False)
+                        frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
+                        frame_data['time'] = solver.current_time
+                        animation_frames.append(frame_data)
+                
+                # Advance to target time
+                solver.advance_to_time(target_time, dt, show_progress=True, 
+                                     collect_interval=dt*10 if config['show_centerlines'] else None)
+                
+                # Store solution snapshot at this time point
+                print(f"Storing solution at t = {solver.current_time:.3f} s")
+                sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                solution_snapshots.append((solver.current_time, sol))
+                
+                # Store frame for animation at target time
+                if config['create_animation']:
+                    frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
+                    frame_data['time'] = solver.current_time
+                    animation_frames.append(frame_data)
+            
+            print("\nSimulation completed!")
+            print(f"Collected {len(solution_snapshots)} solution snapshots")
+            
+            # Import the new plotting function
+            from animation import plot_fv_solution_snapshots_from_history
+            
+            # Plot solution snapshots from collected data
+            print("\nPlotting solution snapshots...")
+            fig = plot_fv_solution_snapshots_from_history(
+                solution_snapshots,
+                solver, postprocessor,
                 T_min_fixed=config['T_min_fixed'],
                 T_max_fixed=config['T_max_fixed'],
                 show_mesh=config.get('show_mesh', False),
                 show_hotspot=config.get('show_hotspot', False),
                 hotspot_params=hotspot_params
             )
-            
             plt.show()
             
+            # Plot centerlines if data was collected
+            if config['show_centerlines']:
+                centerline_history = solver.get_centerline_history()
+                if centerline_history is not None:
+                    print("\nPlotting centerline evolution...")
+                    fig_centerlines, axes = postprocessor.plot_centerlines_from_history(
+                        centerline_history,
+                        hotspot_params=hotspot_params,
+                        show_mesh_lines=config.get('show_mesh', False)
+                    )
+                    plt.show()
+                else:
+                    print("No centerline data available")
+            
             # Create animation if requested
-            if config['create_animation']:
-                # Reset solver for animation
-                ic.set(solver)
-                
-                anim = create_fv_animation(
+            if config['create_animation'] and len(animation_frames) > 0:
+                print("\nCreating animation...")
+                anim = create_fv_animation_from_history(
                     solver, postprocessor,
-                    total_time=config['total_time'],
-                    dt=dt,
-                    nx_plot=config['nx_plot'],
-                    ny_plot=config['ny_plot'],
-                    frame_skip=config['frame_skip'],
+                    animation_frames,
                     T_min_fixed=config['T_min_fixed'],
                     T_max_fixed=config['T_max_fixed'],
                     save_animation=config['save_animation']
                 )
-                
                 plt.show()
                 
             self.status_label.config(text="Simulation completed!")
@@ -984,7 +1078,7 @@ Note: AMR is experimental in this implementation.
             
         finally:
             self.progress.stop()
-            self.run_button.config(state='normal')
+            self.enable_controls_after_simulation()
 
 
 def main():

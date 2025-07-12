@@ -76,6 +76,65 @@ class FVHeatSolver:
             'total_energy': []
         }
         
+        # Centerline data collection
+        self.collect_centerlines = False
+        self.centerline_data = {
+            'times': [],
+            'x_centerline': [],
+            'y_centerline': []
+        }
+        
+    def enable_centerline_collection(self, enable=True):
+        """Enable or disable centerline data collection during simulation."""
+        self.collect_centerlines = enable
+        if enable:
+            # Clear any existing data
+            self.centerline_data = {
+                'times': [],
+                'x_centerline': [],
+                'y_centerline': []
+            }
+            
+    def _collect_centerline_data(self):
+        """Collect centerline data at current time step."""
+        if not self.collect_centerlines:
+            return
+            
+        # Get centerline indices
+        j_center = self.mesh.ny // 2 + self.mesh.ghost_cells
+        i_center = self.mesh.nx // 2 + self.mesh.ghost_cells
+        
+        # Extract x-centerline (along x at y=center)
+        x_data = self.T[j_center, self.mesh.ghost_cells:-self.mesh.ghost_cells].copy()
+        
+        # Extract y-centerline (along y at x=center)
+        y_data = self.T[self.mesh.ghost_cells:-self.mesh.ghost_cells, i_center].copy()
+        
+        # Store data
+        self.centerline_data['times'].append(self.current_time)
+        self.centerline_data['x_centerline'].append(x_data)
+        self.centerline_data['y_centerline'].append(y_data)
+        
+    def get_centerline_history(self):
+        """
+        Get collected centerline data.
+        
+        Returns
+        -------
+        dict
+            Dictionary with times and centerline data arrays
+        """
+        if not self.collect_centerlines or len(self.centerline_data['times']) == 0:
+            return None
+            
+        return {
+            'times': np.array(self.centerline_data['times']),
+            'x_centerline': np.array(self.centerline_data['x_centerline']),
+            'y_centerline': np.array(self.centerline_data['y_centerline']),
+            'x_coords': self.mesh.x_centers,
+            'y_coords': self.mesh.y_centers
+        }
+        
     def set_initial_condition_circular(self, T_background=300.0, T_hotspot=6000.0,
                                      center_x=None, center_y=None, 
                                      hotspot_radius=0.05, smooth_transition=True,
@@ -139,6 +198,9 @@ class FVHeatSolver:
         # Store initial statistics
         self._update_statistics()
         
+        # Collect initial centerline data if enabled
+        self._collect_centerline_data()
+        
     def set_initial_condition_from_array(self, T_array):
         """
         Set initial condition from a numpy array.
@@ -165,6 +227,9 @@ class FVHeatSolver:
         self.current_time = 0.0
         self.step_count = 0
         self._update_statistics()
+        
+        # Collect initial centerline data if enabled
+        self._collect_centerline_data()
         
     def set_reaction_model(self, reaction_model):
         """
@@ -333,7 +398,7 @@ class FVHeatSolver:
         self.step_count += 1
         self._update_statistics()
         
-    def advance_to_time(self, target_time, dt, show_progress=True):
+    def advance_to_time(self, target_time, dt, show_progress=True, collect_interval=None):
         """
         Advance solution to target time.
         
@@ -345,6 +410,8 @@ class FVHeatSolver:
             Time step size (s)
         show_progress : bool
             Show progress bar
+        collect_interval : float, optional
+            Interval for collecting centerline data (None = every step)
             
         Returns
         -------
@@ -355,6 +422,8 @@ class FVHeatSolver:
             pbar = tqdm(total=target_time - self.current_time, 
                        desc="Advancing time", unit='s')
             
+        last_collect_time = self.current_time
+        
         while self.current_time < target_time - 1e-10:
             # Adjust last time step if needed
             step_dt = min(dt, target_time - self.current_time)
@@ -362,8 +431,20 @@ class FVHeatSolver:
             # Take time step
             self.advance(step_dt)
             
+            # Collect centerline data if enabled
+            if self.collect_centerlines:
+                if collect_interval is None:
+                    self._collect_centerline_data()
+                elif self.current_time - last_collect_time >= collect_interval:
+                    self._collect_centerline_data()
+                    last_collect_time = self.current_time
+            
             if show_progress:
                 pbar.update(step_dt)
+                
+        # Make sure to collect at target time
+        if self.collect_centerlines and self.current_time >= target_time - 1e-10:
+            self._collect_centerline_data()
                 
         if show_progress:
             pbar.close()
