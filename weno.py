@@ -256,8 +256,11 @@ class WENOReconstructor:
             order = self.order
             
         j_int, i_int = mesh.get_interior_slice()
-        ny_int = j_int.stop - j_int.start
-        nx_int = i_int.stop - i_int.start
+        #ny_int = j_int.stop - j_int.start
+        #nx_int = i_int.stop - i_int.start
+        
+        ny_int = mesh.ny
+        nx_int = mesh.nx
         
         dfdx = np.zeros((ny_int, nx_int))
         
@@ -295,8 +298,11 @@ class WENOReconstructor:
             order = self.order
             
         j_int, i_int = mesh.get_interior_slice()
-        ny_int = j_int.stop - j_int.start
-        nx_int = i_int.stop - i_int.start
+        #ny_int = j_int.stop - j_int.start
+        #nx_int = i_int.stop - i_int.start
+        
+        ny_int = mesh.ny
+        nx_int = mesh.nx
         
         dfdy = np.zeros((ny_int, nx_int))
         
@@ -312,75 +318,71 @@ class WENOReconstructor:
     
     def compute_laplacian(self, field, mesh, alpha, order=None):
         """
-        Compute diffusive flux divergence (alpha * laplacian) using WENO.
+        Compute Laplacian for diffusion equation using finite volume method.
         
-        Parameters
-        ----------
-        field : ndarray
-            2D temperature field with ghost cells
-        mesh : FVMesh
-            Mesh object
-        alpha : float
-            Thermal diffusivity
-        order : int, optional
-            Order of accuracy
-            
-        Returns
-        -------
-        ndarray
-            Laplacian at cell centers (interior only)
+        For heat equation: ∂T/∂t = α∇²T
+        We compute -∇·(-α∇T) = α∇²T
         """
         if order is None:
             order = self.order
             
         j_int, i_int = mesh.get_interior_slice()
-        ny_int = j_int.stop - j_int.start
-        nx_int = i_int.stop - i_int.start
-        
+        ny_int = mesh.ny
+        nx_int = mesh.nx
         laplacian = np.zeros((ny_int, nx_int))
         
-        # X-direction flux divergence
-        for j_local, j_global in enumerate(range(j_int.start, j_int.stop)):
-            # Reconstruct temperature at faces
-            T_faces = self.reconstruct_x(field, j_global, order)
-            
-            # Compute fluxes at faces using reconstructed derivatives
-            flux_faces = np.zeros(len(T_faces))
-            
-            # For each face, compute gradient
-            for i in range(1, len(T_faces)-1):
-                # Use centered difference at face
-                i_global = i_int.start + i - 1
-                dTdx_face = (field[j_global, i_global+1] - field[j_global, i_global]) / mesh.dx
-                flux_faces[i] = -alpha * dTdx_face
-            
-            # Boundary faces
-            flux_faces[0] = flux_faces[1]
-            flux_faces[-1] = flux_faces[-2]
-            
-            # Flux divergence
-            i_start = i_int.start
-            for i_local in range(nx_int):
-                laplacian[j_local, i_local] += -(flux_faces[i_start + i_local] - 
-                                                 flux_faces[i_start + i_local - 1]) / mesh.dx
-        
-        # Y-direction flux divergence
-        for i_local, i_global in enumerate(range(i_int.start, i_int.stop)):
-            T_faces = self.reconstruct_y(field, i_global, order)
-            
-            flux_faces = np.zeros(len(T_faces))
-            
-            for j in range(1, len(T_faces)-1):
-                j_global = j_int.start + j - 1
-                dTdy_face = (field[j_global+1, i_global] - field[j_global, i_global]) / mesh.dy
-                flux_faces[j] = -alpha * dTdy_face
-            
-            flux_faces[0] = flux_faces[1]
-            flux_faces[-1] = flux_faces[-2]
-            
-            j_start = j_int.start
+        # For low-order methods, use simple finite differences
+        if order <= 2:
+            # Simple 2nd order centered differences
+            g = mesh.ghost_cells
             for j_local in range(ny_int):
-                laplacian[j_local, i_local] += -(flux_faces[j_start + j_local] - 
-                                                 flux_faces[j_start + j_local - 1]) / mesh.dy
+                j = j_local + g
+                for i_local in range(nx_int):
+                    i = i_local + g
+                    
+                    # ∂²T/∂x²
+                    d2Tdx2 = (field[j, i+1] - 2*field[j, i] + field[j, i-1]) / mesh.dx**2
+                    
+                    # ∂²T/∂y²
+                    d2Tdy2 = (field[j+1, i] - 2*field[j, i] + field[j-1, i]) / mesh.dy**2
+                    
+                    laplacian[j_local, i_local] = alpha * (d2Tdx2 + d2Tdy2)
+                    
+        else:
+            # For WENO5, compute fluxes at faces
+            g = mesh.ghost_cells
+            
+            # X-direction diffusive flux: F = -α ∂T/∂x
+            for j_local in range(ny_int):
+                j = j_local + g
                 
+                # Compute gradients at faces using centered differences
+                # This is more stable for diffusion than using WENO reconstruction
+                flux_x = np.zeros(nx_int + 1)
+                for i_face in range(nx_int + 1):
+                    i = i_face + g
+                    # Gradient at face between cells i-1 and i
+                    dTdx = (field[j, i] - field[j, i-1]) / mesh.dx
+                    flux_x[i_face] = -alpha * dTdx
+                
+                # Flux divergence
+                for i_local in range(nx_int):
+                    laplacian[j_local, i_local] += -(flux_x[i_local + 1] - flux_x[i_local]) / mesh.dx
+            
+            # Y-direction diffusive flux: G = -α ∂T/∂y
+            for i_local in range(nx_int):
+                i = i_local + g
+                
+                # Compute gradients at faces
+                flux_y = np.zeros(ny_int + 1)
+                for j_face in range(ny_int + 1):
+                    j = j_face + g
+                    # Gradient at face between cells j-1 and j
+                    dTdy = (field[j, i] - field[j-1, i]) / mesh.dy
+                    flux_y[j_face] = -alpha * dTdy
+                
+                # Flux divergence
+                for j_local in range(ny_int):
+                    laplacian[j_local, i_local] += -(flux_y[j_local + 1] - flux_y[j_local]) / mesh.dy
+        
         return laplacian
