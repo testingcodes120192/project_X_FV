@@ -116,6 +116,8 @@ class FVHeatSimulatorGUI:
         self.var_save_animation = tk.BooleanVar(value=True)
         self.var_T_min_fixed = tk.DoubleVar(value=300.0)
         self.var_T_max_fixed = tk.DoubleVar(value=6000.0)
+        self.var_show_mesh = tk.BooleanVar(value=False)
+        self.var_show_hotspot = tk.BooleanVar(value=False)
         
     def create_simulation_tab(self):
         """Create simulation settings tab."""
@@ -176,6 +178,33 @@ class FVHeatSimulatorGUI:
         
         ttk.Label(tab, text="Plate Width (m):").grid(row=6, column=0, sticky='e', padx=5, pady=5)
         ttk.Entry(tab, textvariable=self.var_plate_width, width=15).grid(row=6, column=1, sticky='w', padx=5)
+        
+        # Mesh Preview section
+        ttk.Label(tab, text="Mesh Preview", font=('TkDefaultFont', 10, 'bold')).grid(
+            row=7, column=0, columnspan=2, pady=10)
+        
+        # Preview options
+        preview_frame = ttk.Frame(tab)
+        preview_frame.grid(row=8, column=0, columnspan=2, pady=5)
+        
+        ttk.Button(preview_frame, text="Show Mesh", 
+                  command=self.show_mesh_preview).pack(side='left', padx=5)
+        
+        ttk.Button(preview_frame, text="Show Mesh + Hotspot", 
+                  command=self.show_mesh_with_hotspot).pack(side='left', padx=5)
+        
+        # Info about cell sizes
+        self.cell_size_label = ttk.Label(tab, text="", font=('TkDefaultFont', 9, 'italic'))
+        self.cell_size_label.grid(row=9, column=0, columnspan=2, pady=5)
+        
+        # Update cell size info when values change
+        self.var_nx_cells.trace('w', self.update_cell_size_info)
+        self.var_ny_cells.trace('w', self.update_cell_size_info)
+        self.var_plate_length.trace('w', self.update_cell_size_info)
+        self.var_plate_width.trace('w', self.update_cell_size_info)
+        
+        # Initial update
+        self.update_cell_size_info()
         
     def create_numerical_tab(self):
         """Create numerical methods tab."""
@@ -371,26 +400,35 @@ Note: AMR is experimental in this implementation.
         ttk.Label(tab, text="Plot Points (Y):").grid(row=2, column=0, sticky='e', padx=5, pady=5)
         ttk.Entry(tab, textvariable=self.var_ny_plot, width=15).grid(row=2, column=1, sticky='w', padx=5)
         
-        ttk.Label(tab, text="Animation Settings", font=('TkDefaultFont', 10, 'bold')).grid(
+        ttk.Label(tab, text="Mesh Visualization", font=('TkDefaultFont', 10, 'bold')).grid(
             row=3, column=0, columnspan=2, pady=10)
         
-        ttk.Checkbutton(tab, text="Create Animation", 
-                       variable=self.var_create_animation).grid(row=4, column=0, columnspan=2, pady=5)
+        ttk.Checkbutton(tab, text="Show Mesh Lines", 
+                       variable=self.var_show_mesh).grid(row=4, column=0, columnspan=2, pady=5)
         
-        ttk.Label(tab, text="Frame Skip:").grid(row=5, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(tab, textvariable=self.var_frame_skip, width=15).grid(row=5, column=1, sticky='w', padx=5)
+        ttk.Checkbutton(tab, text="Show Initial Hotspot Boundary", 
+                       variable=self.var_show_hotspot).grid(row=5, column=0, columnspan=2, pady=5)
+        
+        ttk.Label(tab, text="Animation Settings", font=('TkDefaultFont', 10, 'bold')).grid(
+            row=6, column=0, columnspan=2, pady=10)
+        
+        ttk.Checkbutton(tab, text="Create Animation", 
+                       variable=self.var_create_animation).grid(row=7, column=0, columnspan=2, pady=5)
+        
+        ttk.Label(tab, text="Frame Skip:").grid(row=8, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(tab, textvariable=self.var_frame_skip, width=15).grid(row=8, column=1, sticky='w', padx=5)
         
         ttk.Checkbutton(tab, text="Save Animation", 
-                       variable=self.var_save_animation).grid(row=6, column=0, columnspan=2, pady=5)
+                       variable=self.var_save_animation).grid(row=9, column=0, columnspan=2, pady=5)
         
         ttk.Label(tab, text="Temperature Range", font=('TkDefaultFont', 10, 'bold')).grid(
-            row=7, column=0, columnspan=2, pady=10)
+            row=10, column=0, columnspan=2, pady=10)
         
-        ttk.Label(tab, text="T Min (K):").grid(row=8, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(tab, textvariable=self.var_T_min_fixed, width=15).grid(row=8, column=1, sticky='w', padx=5)
+        ttk.Label(tab, text="T Min (K):").grid(row=11, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(tab, textvariable=self.var_T_min_fixed, width=15).grid(row=11, column=1, sticky='w', padx=5)
         
-        ttk.Label(tab, text="T Max (K):").grid(row=9, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(tab, textvariable=self.var_T_max_fixed, width=15).grid(row=9, column=1, sticky='w', padx=5)
+        ttk.Label(tab, text="T Max (K):").grid(row=12, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(tab, textvariable=self.var_T_max_fixed, width=15).grid(row=12, column=1, sticky='w', padx=5)
         
     def update_resolution_info(self, *args):
         """Update resolution information display."""
@@ -416,6 +454,263 @@ Note: AMR is experimental in this implementation.
                 )
         except:
             pass
+    
+    def update_resolution_info(self, *args):
+        """Update resolution information display."""
+        try:
+            nx = self.var_nx_cells.get()
+            ny = self.var_ny_cells.get()
+            total_cells = nx * ny
+            
+            self.resolution_label.config(
+                text=f"Total cells: {total_cells:,} ({nx}×{ny})"
+            )
+            
+            # Estimate memory usage (rough)
+            # Each cell needs ~8 bytes (double) + ghost cells
+            memory_mb = total_cells * 8 * 2 / 1024 / 1024  # Factor of 2 for T and T_old
+            if memory_mb < 1:
+                self.resolution_label.config(
+                    text=f"Total cells: {total_cells:,} ({nx}×{ny}) - Memory: <1 MB"
+                )
+            else:
+                self.resolution_label.config(
+                    text=f"Total cells: {total_cells:,} ({nx}×{ny}) - Memory: ~{memory_mb:.1f} MB"
+                )
+        except:
+            pass
+    
+    def update_cell_size_info(self, *args):
+        """Update cell size information."""
+        try:
+            nx = self.var_nx_cells.get()
+            ny = self.var_ny_cells.get()
+            length = self.var_plate_length.get()
+            width = self.var_plate_width.get()
+            
+            dx = length / nx
+            dy = width / ny
+            
+            # Convert to mm for display
+            dx_mm = dx * 1000
+            dy_mm = dy * 1000
+            
+            self.cell_size_label.config(
+                text=f"Cell size: Δx = {dx_mm:.2f} mm, Δy = {dy_mm:.2f} mm"
+            )
+        except:
+            pass
+    
+    def show_mesh_preview(self):
+        """Show mesh preview in a new window."""
+        try:
+            # Get current parameters
+            nx = self.var_nx_cells.get()
+            ny = self.var_ny_cells.get()
+            length = self.var_plate_length.get()
+            width = self.var_plate_width.get()
+            
+            # Create temporary mesh
+            from mesh import FVMesh
+            mesh = FVMesh(nx, ny, length, width)
+            
+            # Create figure
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as patches
+            
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8*width/length))
+            
+            # Draw mesh
+            # Draw all cells
+            for j in range(ny):
+                for i in range(nx):
+                    x_left = mesh.x_faces[i]
+                    x_right = mesh.x_faces[i+1]
+                    y_bottom = mesh.y_faces[j]
+                    y_top = mesh.y_faces[j+1]
+                    
+                    rect = patches.Rectangle((x_left, y_bottom), 
+                                           x_right - x_left, 
+                                           y_top - y_bottom,
+                                           linewidth=0.5, 
+                                           edgecolor='black',
+                                           facecolor='lightblue',
+                                           alpha=0.3)
+                    ax.add_patch(rect)
+            
+            # Highlight a few cells if mesh is coarse
+            if nx <= 30 and ny <= 30:
+                # Mark center cell
+                i_center = nx // 2
+                j_center = ny // 2
+                x_left = mesh.x_faces[i_center]
+                x_right = mesh.x_faces[i_center+1]
+                y_bottom = mesh.y_faces[j_center]
+                y_top = mesh.y_faces[j_center+1]
+                
+                rect = patches.Rectangle((x_left, y_bottom), 
+                                       x_right - x_left, 
+                                       y_top - y_bottom,
+                                       linewidth=1.5, 
+                                       edgecolor='red',
+                                       facecolor='pink',
+                                       alpha=0.5,
+                                       label='Center cell')
+                ax.add_patch(rect)
+            
+            # Add grid lines for clarity
+            for i in range(nx + 1):
+                ax.axvline(x=mesh.x_faces[i], color='gray', linewidth=0.5, alpha=0.5)
+            for j in range(ny + 1):
+                ax.axhline(y=mesh.y_faces[j], color='gray', linewidth=0.5, alpha=0.5)
+            
+            ax.set_xlim(0, length)
+            ax.set_ylim(0, width)
+            ax.set_aspect('equal')
+            ax.set_xlabel('X (m)', fontsize=12)
+            ax.set_ylabel('Y (m)', fontsize=12)
+            ax.set_title(f'Finite Volume Mesh: {nx}×{ny} cells\n'
+                        f'Domain: {length}×{width} m, '
+                        f'Cell size: {mesh.dx*1000:.1f}×{mesh.dy*1000:.1f} mm',
+                        fontsize=14)
+            
+            if nx <= 30 and ny <= 30:
+                ax.legend()
+            
+            plt.tight_layout()
+            plt.show()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create mesh preview:\n{str(e)}")
+    
+    def show_mesh_with_hotspot(self):
+        """Show mesh preview with hotspot overlay."""
+        try:
+            # Get mesh parameters
+            nx = self.var_nx_cells.get()
+            ny = self.var_ny_cells.get()
+            length = self.var_plate_length.get()
+            width = self.var_plate_width.get()
+            
+            # Get hotspot parameters
+            ic_type = self.var_ic_type.get()
+            if ic_type != 'circular':
+                messagebox.showinfo("Info", "Hotspot preview only available for circular initial condition")
+                return
+            
+            center_x = self.var_center_x.get()
+            center_y = self.var_center_y.get()
+            radius = self.var_hotspot_radius.get()
+            
+            # Create temporary mesh
+            from mesh import FVMesh
+            mesh = FVMesh(nx, ny, length, width)
+            
+            # Create figure
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as patches
+            import numpy as np
+            
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8*width/length))
+            
+            # Determine which cells are inside hotspot
+            cells_in_hotspot = []
+            cells_partial = []
+            
+            for j in range(ny):
+                for i in range(nx):
+                    x_center = mesh.x_centers[i]
+                    y_center = mesh.y_centers[j]
+                    
+                    # Check if cell center is in hotspot
+                    r = np.sqrt((x_center - center_x)**2 + (y_center - center_y)**2)
+                    
+                    if r <= radius:
+                        cells_in_hotspot.append((i, j))
+                    elif r <= radius + np.sqrt(mesh.dx**2 + mesh.dy**2)/2:
+                        # Cell might be partially in hotspot
+                        cells_partial.append((i, j))
+            
+            # Draw all cells
+            for j in range(ny):
+                for i in range(nx):
+                    x_left = mesh.x_faces[i]
+                    x_right = mesh.x_faces[i+1]
+                    y_bottom = mesh.y_faces[j]
+                    y_top = mesh.y_faces[j+1]
+                    
+                    # Determine cell color
+                    if (i, j) in cells_in_hotspot:
+                        facecolor = 'red'
+                        alpha = 0.5
+                        edgecolor = 'darkred'
+                    elif (i, j) in cells_partial:
+                        facecolor = 'orange'
+                        alpha = 0.3
+                        edgecolor = 'darkorange'
+                    else:
+                        facecolor = 'lightblue'
+                        alpha = 0.2
+                        edgecolor = 'black'
+                    
+                    rect = patches.Rectangle((x_left, y_bottom), 
+                                           x_right - x_left, 
+                                           y_top - y_bottom,
+                                           linewidth=0.5, 
+                                           edgecolor=edgecolor,
+                                           facecolor=facecolor,
+                                           alpha=alpha)
+                    ax.add_patch(rect)
+            
+            # Draw hotspot circle
+            circle = patches.Circle((center_x, center_y), radius,
+                                  linewidth=2, edgecolor='darkgreen',
+                                  facecolor='none', linestyle='--',
+                                  label=f'Hotspot (r={radius*1000:.0f}mm)')
+            ax.add_patch(circle)
+            
+            # Mark hotspot center
+            ax.plot(center_x, center_y, 'g+', markersize=10, markeredgewidth=2,
+                   label=f'Center ({center_x:.3f}, {center_y:.3f})')
+            
+            # Add thin grid lines
+            for i in range(nx + 1):
+                ax.axvline(x=mesh.x_faces[i], color='gray', linewidth=0.3, alpha=0.3)
+            for j in range(ny + 1):
+                ax.axhline(y=mesh.y_faces[j], color='gray', linewidth=0.3, alpha=0.3)
+            
+            ax.set_xlim(0, length)
+            ax.set_ylim(0, width)
+            ax.set_aspect('equal')
+            ax.set_xlabel('X (m)', fontsize=12)
+            ax.set_ylabel('Y (m)', fontsize=12)
+            ax.set_title(f'Mesh with Hotspot Preview\n'
+                        f'{nx}×{ny} cells, '
+                        f'{len(cells_in_hotspot)} cells fully inside hotspot, '
+                        f'{len(cells_partial)} cells partially inside',
+                        fontsize=14)
+            
+            # Add legend
+            ax.legend(loc='upper right')
+            
+            # Add color explanation
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='red', alpha=0.5, label='Fully inside hotspot'),
+                Patch(facecolor='orange', alpha=0.3, label='Partially inside'),
+                Patch(facecolor='lightblue', alpha=0.2, label='Outside hotspot')
+            ]
+            ax2 = ax.twinx()
+            ax2.set_yticks([])
+            ax2.legend(handles=legend_elements, loc='upper left')
+            
+            plt.tight_layout()
+            plt.show()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create mesh preview:\n{str(e)}")
+ 
+    
             
     def update_ic_options(self, event=None):
         """Show/hide IC options based on type."""
@@ -512,6 +807,8 @@ Note: AMR is experimental in this implementation.
             'save_animation': self.var_save_animation.get(),
             'T_min_fixed': self.var_T_min_fixed.get(),
             'T_max_fixed': self.var_T_max_fixed.get(),
+            'show_mesh': self.var_show_mesh.get(),
+            'show_hotspot': self.var_show_hotspot.get(),
         }
         
         return config
@@ -627,12 +924,34 @@ Note: AMR is experimental in this implementation.
             # Plot solution at specified times
             time_points = config['time_points']
             
+            # Get hotspot parameters for visualization
+            hotspot_params = None
+            if config['ic_type'] == 'circular' and config.get('show_hotspot', False):
+                hotspot_params = {
+                    'center_x': config['center_x'],
+                    'center_y': config['center_y'],
+                    'radius': config['hotspot_radius']
+                }
+            
+            # Create mesh visualization if grid is small enough
+            if solver.mesh.nx <= 50 and solver.mesh.ny <= 50:
+                fig_mesh, ax_mesh = postprocessor.plot_mesh_with_solution(
+                    solver, 
+                    show_values=(solver.mesh.nx <= 20 and solver.mesh.ny <= 20),
+                    show_hotspot=config.get('show_hotspot', False),
+                    hotspot_params=hotspot_params
+                )
+                plt.show()
+                
             fig = plot_fv_solution_snapshots(
                 solver, postprocessor, time_points,
                 nx_plot=config['nx_plot'],
                 ny_plot=config['ny_plot'],
                 T_min_fixed=config['T_min_fixed'],
-                T_max_fixed=config['T_max_fixed']
+                T_max_fixed=config['T_max_fixed'],
+                show_mesh=config.get('show_mesh', False),
+                show_hotspot=config.get('show_hotspot', False),
+                hotspot_params=hotspot_params
             )
             
             plt.show()

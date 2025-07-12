@@ -502,3 +502,153 @@ def plot_convergence_study(convergence_data):
         
     plt.tight_layout()
     return fig
+
+def plot_fv_solution_snapshots(solver, postprocessor, time_points, 
+                              nx_plot=101, ny_plot=101,
+                              T_min_fixed=None, T_max_fixed=None,
+                              show_mesh=False, show_hotspot=False,
+                              hotspot_params=None):
+    """
+    Plot solution at specific time points.
+    
+    Parameters
+    ----------
+    solver : FVHeatSolver
+        Solver object
+    postprocessor : FVPostProcessor
+        Post-processor object
+    time_points : list
+        List of times to plot
+    nx_plot : int
+        Plotting resolution in x
+    ny_plot : int
+        Plotting resolution in y
+    T_min_fixed : float, optional
+        Fixed minimum temperature for colorbar
+    T_max_fixed : float, optional
+        Fixed maximum temperature for colorbar
+    show_mesh : bool
+        Show mesh lines overlay
+    show_hotspot : bool
+        Show initial hotspot boundary
+    hotspot_params : dict
+        Hotspot parameters (center_x, center_y, radius)
+        
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure object
+    """
+    import matplotlib.patches as patches
+    
+    n_times = len(time_points)
+    
+    # Create figure
+    if solver.enable_reactions:
+        fig, axes = plt.subplots(2, n_times, figsize=(4*n_times, 8))
+        if n_times == 1:
+            axes = axes.reshape(2, 1)
+    else:
+        fig, axes = plt.subplots(1, n_times, figsize=(4*n_times, 4))
+        if n_times == 1:
+            axes = axes.reshape(1, 1)
+            
+    # Store solutions
+    solutions = []
+    
+    # Reset solver
+    solver.current_time = 0.0
+    solver.step_count = 0
+    
+    # Get initial solution
+    sol = postprocessor.get_solution_on_grid(solver, nx_plot, ny_plot, smooth=True)
+    solutions.append(sol)
+    
+    # Determine temperature range
+    if T_min_fixed is None:
+        T_min_fixed = min(np.min(sol['T']) for sol in solutions)
+    if T_max_fixed is None:
+        T_max_fixed = max(np.max(sol['T']) for sol in solutions)
+        
+    # Advance to each time point
+    dt = solver.compute_stable_timestep()
+    for t in time_points[1:]:
+        solver.advance_to_time(t, dt, show_progress=True)
+        sol = postprocessor.get_solution_on_grid(solver, nx_plot, ny_plot, smooth=True)
+        solutions.append(sol)
+        
+    # Plot each snapshot
+    X_plot, Y_plot = np.meshgrid(solutions[0]['x'], solutions[0]['y'])
+    levels = np.linspace(T_min_fixed, T_max_fixed, 51)
+    
+    for idx, (t, sol) in enumerate(zip(time_points, solutions)):
+        # Temperature plot
+        if solver.enable_reactions:
+            ax_temp = axes[0, idx]
+            ax_lambda = axes[1, idx]
+        else:
+            ax_temp = axes[idx] if n_times > 1 else axes[0]
+            
+        cf = ax_temp.contourf(X_plot, Y_plot, sol['T'], 
+                             levels=levels, cmap='hot', extend='both')
+        
+        # Add mesh overlay if requested
+        if show_mesh:
+            # Draw vertical lines
+            for i in range(solver.mesh.nx + 1):
+                ax_temp.axvline(x=solver.mesh.x_faces[i], color='black', 
+                               linewidth=0.5, alpha=0.3)
+            # Draw horizontal lines
+            for j in range(solver.mesh.ny + 1):
+                ax_temp.axhline(y=solver.mesh.y_faces[j], color='black', 
+                               linewidth=0.5, alpha=0.3)
+        
+        # Add hotspot boundary if requested
+        if show_hotspot and hotspot_params is not None:
+            center_x = hotspot_params.get('center_x', solver.mesh.plate_length/2)
+            center_y = hotspot_params.get('center_y', solver.mesh.plate_width/2)
+            radius = hotspot_params.get('radius', 0.05)
+            
+            circle = patches.Circle((center_x, center_y), radius,
+                                  linewidth=2, edgecolor='lime',
+                                  facecolor='none', linestyle='--')
+            ax_temp.add_patch(circle)
+        
+        # Format time for title
+        if t == 0:
+            time_str = 't = 0 s (Initial)'
+        elif t < 1e-6:
+            time_str = f't = {t*1e9:.1f} ns'
+        elif t < 1e-3:
+            time_str = f't = {t*1e6:.1f} μs'
+        elif t < 1:
+            time_str = f't = {t*1e3:.1f} ms'
+        else:
+            time_str = f't = {t:.3f} s'
+            
+        ax_temp.set_title(time_str, fontsize=12)
+        ax_temp.set_xlabel('X (m)')
+        ax_temp.set_ylabel('Y (m)')
+        ax_temp.set_aspect('equal')
+        
+        # Colorbar for last plot
+        if idx == n_times - 1:
+            cbar = plt.colorbar(cf, ax=ax_temp)
+            cbar.set_label('Temperature (K)')
+            
+        # Reaction plot if enabled
+        if solver.enable_reactions and 'lambda_rxn' in sol:
+            cf_lambda = ax_lambda.contourf(X_plot, Y_plot, sol['lambda_rxn'],
+                                          levels=np.linspace(0, 1, 21),
+                                          cmap='viridis')
+            ax_lambda.set_title(f'λ at {time_str}', fontsize=12)
+            ax_lambda.set_xlabel('X (m)')
+            ax_lambda.set_ylabel('Y (m)')
+            ax_lambda.set_aspect('equal')
+            
+            if idx == n_times - 1:
+                cbar = plt.colorbar(cf_lambda, ax=ax_lambda)
+                cbar.set_label('Reaction Progress')
+                
+    plt.tight_layout()
+    return fig

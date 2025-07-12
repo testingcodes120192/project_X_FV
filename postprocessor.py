@@ -394,6 +394,105 @@ class FVPostProcessor:
         
         return flux
     
+    def plot_mesh_with_solution(self, solver, show_values=False, show_hotspot=False,
+                                hotspot_params=None, figsize=(10, 8)):
+        """
+        Plot the finite volume mesh with optional solution values and hotspot boundary.
+        
+        Parameters
+        ----------
+        solver : FVHeatSolver
+            Solver object
+        show_values : bool
+            Show temperature values in cells
+        show_hotspot : bool
+            Overlay hotspot boundary
+        hotspot_params : dict
+            Parameters for hotspot circle: center_x, center_y, radius
+        figsize : tuple
+            Figure size
+            
+        Returns
+        -------
+        fig, ax : matplotlib objects
+            Figure and axes
+        """
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+        from matplotlib.colors import Normalize
+        from matplotlib.cm import ScalarMappable
+        
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        
+        # Extract interior solution
+        T_interior = self.mesh.extract_interior(solver.T)
+        
+        # Create colormap normalization
+        norm = Normalize(vmin=np.min(T_interior), vmax=np.max(T_interior))
+        sm = ScalarMappable(norm=norm, cmap='hot')
+        
+        # Plot cells
+        for j in range(self.mesh.ny):
+            for i in range(self.mesh.nx):
+                # Cell boundaries
+                x_left = self.mesh.x_faces[i]
+                x_right = self.mesh.x_faces[i+1]
+                y_bottom = self.mesh.y_faces[j]
+                y_top = self.mesh.y_faces[j+1]
+                
+                # Cell temperature
+                T_cell = T_interior[j, i]
+                color = sm.to_rgba(T_cell)
+                
+                # Draw cell
+                rect = patches.Rectangle((x_left, y_bottom), 
+                                       x_right - x_left, 
+                                       y_top - y_bottom,
+                                       linewidth=0.5, 
+                                       edgecolor='black',
+                                       facecolor=color,
+                                       alpha=0.8)
+                ax.add_patch(rect)
+                
+                # Show temperature value if requested
+                if show_values and self.mesh.nx <= 20 and self.mesh.ny <= 20:
+                    x_center = self.mesh.x_centers[i]
+                    y_center = self.mesh.y_centers[j]
+                    ax.text(x_center, y_center, f'{T_cell:.0f}', 
+                           ha='center', va='center', fontsize=8,
+                           color='white' if T_cell > (norm.vmax + norm.vmin)/2 else 'black')
+        
+        # Add colorbar
+        cbar = plt.colorbar(sm, ax=ax)
+        cbar.set_label('Temperature (K)', fontsize=12)
+        
+        # Overlay hotspot boundary if requested
+        if show_hotspot and hotspot_params is not None:
+            center_x = hotspot_params.get('center_x', self.mesh.plate_length/2)
+            center_y = hotspot_params.get('center_y', self.mesh.plate_width/2)
+            radius = hotspot_params.get('radius', 0.05)
+            
+            # Draw hotspot circle
+            circle = patches.Circle((center_x, center_y), radius,
+                                  linewidth=2, edgecolor='lime',
+                                  facecolor='none', linestyle='--',
+                                  label='Initial hotspot boundary')
+            ax.add_patch(circle)
+            ax.legend()
+        
+        # Set labels and title
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.set_title(f'Finite Volume Mesh ({self.mesh.nx}×{self.mesh.ny} cells) at t={solver.current_time:.3f}s',
+                    fontsize=14)
+        ax.set_aspect('equal')
+        ax.set_xlim(0, self.mesh.plate_length)
+        ax.set_ylim(0, self.mesh.plate_width)
+        
+        plt.tight_layout()
+        return fig, ax
+    
+    
     def create_convergence_data(self, solver_list, exact_solution=None):
         """
         Create convergence study data from multiple solver runs.
