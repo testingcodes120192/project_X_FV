@@ -224,11 +224,11 @@ class AMReXDataBridge:
                 
                 # Get cell size for this level
                 if hasattr(geom, 'CellSize'):
-                    dx_level = geom.CellSize()[0]
-                    dy_level = geom.CellSize()[1]
+                    dx_level = geom.data().CellSize()[0]
+                    dy_level = geom.data().CellSize()[1]
                 else:
                     # Calculate from domain
-                    domain = geom.Domain()
+                    domain = geom.domain
                     dx_level = (domain_hi[0] - domain_lo[0]) / domain.size()[0]
                     dy_level = (domain_hi[1] - domain_lo[1]) / domain.size()[1]
                 
@@ -296,16 +296,16 @@ class AMReXDataBridge:
         
         # Get cell size and problem bounds
         if hasattr(geom, 'CellSize'):
-            dx = geom.CellSize()
+            dx = geom.data().CellSize()
         else:
-            domain = geom.Domain()
-            prob_lo = geom.ProbLo() if hasattr(geom, 'ProbLo') else [0.0, 0.0]
-            prob_hi = geom.ProbHi() if hasattr(geom, 'ProbHi') else [1.0, 1.0]
+            domain = geom.domain
+            prob_lo = geom.prob_lo() if hasattr(geom, 'prob_lo') else [0.0, 0.0]
+            prob_hi = geom.prob_hi() if hasattr(geom, 'prob_hi') else [1.0, 1.0]
             dx = [(prob_hi[0] - prob_lo[0]) / domain.size()[0],
                   (prob_hi[1] - prob_lo[1]) / domain.size()[1]]
-        
-        prob_lo = geom.ProbLo() if hasattr(geom, 'ProbLo') else [0.0, 0.0]
-        
+
+        prob_lo = geom.prob_lo() if hasattr(geom, 'prob_lo') else [0.0, 0.0]
+
         # Initialize with function
         for mfi in mf:
             bx = mfi.tilebox()

@@ -123,7 +123,7 @@ class FVHeatSimulatorGUI:
         
         # AMR
         self.var_enable_amr = tk.BooleanVar(value=False)
-        self.var_amr_backend = tk.StringVar(value='simple')
+        self.var_amr_backend = tk.StringVar(value='amrex')
         self.var_max_levels = tk.IntVar(value=3)
         self.var_refinement_ratio = tk.IntVar(value=2)
         self.var_regrid_interval = tk.IntVar(value=10)
@@ -872,6 +872,7 @@ Time Integration:
             
             # AMR
             'enable_amr': self.var_enable_amr.get(),
+            'amr_backend': self.var_amr_backend.get() if hasattr(self, 'var_amr_backend') else 'simple',
             'max_levels': self.var_max_levels.get(),
             'refinement_ratio': self.var_refinement_ratio.get(),
             'refine_threshold': self.var_refine_threshold.get(),
@@ -1157,12 +1158,17 @@ Time Integration:
             
             # AMR information
             if config['enable_amr']:
-                print(f"AMR: Enabled - Backend: {config['amr_backend']}")
+                print(f"AMR: Enabled - Backend: {config.get('amr_backend', 'none')}")
                 print(f"     Max levels: {config['max_levels']}")
                 print(f"     Refinement ratio: {config['refinement_ratio']}")
             else:
                 print("AMR: Disabled")
-                
+            
+            if config.get('enable_amr', False):
+                print(f"AMR: Enabled - Backend: {config.get('amr_backend', 'simple')}")
+            else:
+                print("AMR: Disabled")   
+                 
             print(f"Simulation time: {config['total_time']} s")
             print(f"Centerline collection: {'Enabled' if config['show_centerlines'] else 'Disabled'}")
             print(f"Animation creation: {'Enabled' if config['create_animation'] else 'Disabled'}")
@@ -1479,7 +1485,7 @@ Time Integration:
             self.progress.stop()
             self.enable_controls_after_simulation()
             
-    def preview_amr_grid(self):
+    def preview_amr_grid_org(self):
         """Preview AMR grid structure without running simulation."""
         if not self.var_enable_amr.get():
             messagebox.showinfo("Info", "Please enable AMR first")
@@ -1588,6 +1594,134 @@ Time Integration:
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to preview AMR grid:\n{str(e)}")
+            
+    def preview_amr_grid(self):
+        """Preview AMR grid structure without running simulation."""
+        if not self.var_enable_amr.get():
+            messagebox.showinfo("Info", "Please enable AMR first")
+            return
+        
+        try:
+            # Get configuration
+            config = self.get_config_dict()
+            backend = self.var_amr_backend.get()
+            
+            print(f"\n=== AMR Preview Debug ===")
+            print(f"Backend requested: {backend}")
+            
+            # Import and check AMR factory
+            try:
+                from amr.amr_factory import AMRFactory
+                print("✓ AMRFactory imported successfully")
+            except ImportError as e:
+                print(f"✗ Failed to import AMRFactory: {e}")
+                raise
+            
+            # Check available backends
+            try:
+                available = AMRFactory.get_available_backends()
+                print(f"Available backends: {available}")
+            except Exception as e:
+                print(f"✗ Failed to get available backends: {e}")
+                available = []
+            
+            # Check if requested backend is available
+            if backend not in available:
+                print(f"⚠ Backend '{backend}' not in available list")
+                if 'simple' in available:
+                    print("  → Falling back to 'simple' backend")
+                    backend = 'simple'
+                else:
+                    raise ValueError(f"No AMR backends available! Available: {available}")
+            
+            # Create mesh and solver
+            print("\nCreating mesh and solver...")
+            from mesh import FVMesh
+            from solver import FVHeatSolver
+            from initial_conditions import get_fv_initial_condition
+            
+            mesh = FVMesh(
+                nx_cells=config['nx_cells'],
+                ny_cells=config['ny_cells'],
+                plate_length=config['plate_length'],
+                plate_width=config['plate_width']
+            )
+            print(f"✓ Mesh created: {config['nx_cells']}×{config['ny_cells']} cells")
+            
+            solver = FVHeatSolver(
+                mesh=mesh,
+                alpha=config['alpha'],
+                spatial_order=config['spatial_order'],
+                time_integration=config['time_integration'],
+                enable_reactions=config['enable_reactions']
+            )
+            print("✓ Solver created")
+            
+            # Set initial condition
+            print("\nSetting initial condition...")
+            ic_params = {
+                'background_temp': config['background_temp'],
+                'hotspot_temp': config['hotspot_temp'],
+                'center_x': config['center_x'],
+                'center_y': config['center_y'],
+                'hotspot_radius': config['hotspot_radius'],
+                'smooth_transition': config['smooth_transition'],
+                'transition_width': config['transition_width'],
+            }
+            
+            ic = get_fv_initial_condition(config['ic_type'], ic_params)
+            ic.set(solver)
+            print("✓ Initial condition set")
+            
+            # Create AMR system
+            print(f"\nCreating AMR system with backend: {backend}")
+            amr_config = self.get_amr_config()
+            print(f"AMR config: {amr_config}")
+            
+            try:
+                amr_system = AMRFactory.create_amr(
+                    backend=backend,
+                    base_solver=solver,
+                    config=amr_config
+                )
+                print(f"AMR system created: {amr_system}")
+            except Exception as e:
+                print(f"✗ Failed to create AMR system: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+            
+            if amr_system is None:
+                raise ValueError("AMRFactory.create_amr returned None")
+                
+            print("✓ AMR system created successfully")
+            
+            # Now do the visualization...
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            fig, ax = plt.subplots(figsize=(10, 10))
+            amr_system.plot_grid_structure(ax, show_levels=True)
+            ax.set_title(f'AMR Grid Structure - {backend} backend')
+            plt.show()
+            
+            # Show statistics
+            stats = amr_system.get_statistics()
+            info = f"AMR Statistics:\n"
+            info += f"Total cells: {stats['total_cells']:,}\n"
+            info += f"Efficiency: {stats.get('efficiency', 0):.1%}\n"
+            messagebox.showinfo("AMR Preview Success", info)
+            
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"\n✗ Preview failed with error: {type(e).__name__}: {e}")
+            print(error_detail)
+            messagebox.showerror("Error", 
+                f"Failed to preview AMR grid:\n\n"
+                f"Error type: {type(e).__name__}\n"
+                f"Error message: {str(e)}\n\n"
+                f"Check console for details.")
             
 def main():
     """Main entry point."""
