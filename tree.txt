@@ -1,0 +1,57 @@
+Folder PATH listing
+Volume serial number is 08FB-63BB
+C:.
+│   .gitattributes
+│   .gitignore
+│   animation.py
+│   config_fv.ini
+│   image_tools.py
+│   initial_conditions.py
+│   main.py
+│   mesh.py
+│   postprocessor.py
+│   README.md
+│   requirements.txt
+│   solver.py
+│   weno.py
+│   __init__.py
+│
+├───amr
+│   │   amrex_amr.py
+│   │   amrex_config.py
+│   │   amrex_data_bridge.py
+│   │   amr_factory.py
+│   │   base_amr.py
+│   │   simple_amr.py
+│   │   __init__.py
+│   │
+│   └───__pycache__
+│           amrex_amr.cpython-312.pyc
+│           amrex_config.cpython-312.pyc
+│           amrex_data_bridge.cpython-312.pyc
+│           amr_factory.cpython-312.pyc
+│           base_amr.cpython-312.pyc
+│           simple_amr.cpython-312.pyc
+│           __init__.cpython-312.pyc
+│
+├───result
+│       0.png
+│       1.png
+│       2.png
+│       B1.png
+│       B2.png
+│
+└───__pycache__
+        animation.cpython-311.pyc
+        animation.cpython-312.pyc
+        initial_conditions.cpython-311.pyc
+        initial_conditions.cpython-312.pyc
+        mesh.cpython-311.pyc
+        mesh.cpython-312.pyc
+        postprocessor.cpython-311.pyc
+        postprocessor.cpython-312.pyc
+        simple_amr.cpython-311.pyc
+        solver.cpython-311.pyc
+        solver.cpython-312.pyc
+        weno.cpython-311.pyc
+        weno.cpython-312.pyc

@@ -1,3 +1,17 @@
+# Add this as the FIRST lines in main.py
+import sys
+print(f"Python executable: {sys.executable}")
+print(f"Python path: {sys.path[:3]}...")  # First few paths
+
+try:
+    import amrex.space2d as amr
+    print("Direct import in main.py successful!")
+except ImportError as e:
+    print(f"Direct import in main.py failed: {e}")
+    
+# Continue with rest of imports...
+
+
 # main.py
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -14,7 +28,10 @@ from solver import FVHeatSolver
 from postprocessor import FVPostProcessor
 from initial_conditions import get_fv_initial_condition
 from animation import create_fv_animation_from_history, plot_fv_solution_snapshots, plot_convergence_study
-from simple_amr import SimpleAMR
+from typing import Optional
+
+
+
 
 class FVHeatSimulatorGUI:
     """
@@ -106,10 +123,23 @@ class FVHeatSimulatorGUI:
         
         # AMR
         self.var_enable_amr = tk.BooleanVar(value=False)
+        self.var_amr_backend = tk.StringVar(value='simple')
         self.var_max_levels = tk.IntVar(value=3)
         self.var_refinement_ratio = tk.IntVar(value=2)
+        self.var_regrid_interval = tk.IntVar(value=10)
         self.var_refine_threshold = tk.DoubleVar(value=100.0)
         self.var_coarsen_threshold = tk.DoubleVar(value=10.0)
+        
+        # AMReX specific
+        self.var_amrex_max_grid_size = tk.IntVar(value=32)
+        self.var_amrex_blocking_factor = tk.IntVar(value=8)
+        self.var_amrex_grid_eff = tk.DoubleVar(value=0.7)
+        self.var_amrex_n_error_buf = tk.IntVar(value=2)
+        
+        # AMR visualization
+        self.var_show_amr_grid = tk.BooleanVar(value=False)
+        self.var_color_by_level = tk.BooleanVar(value=True)
+        self.var_show_refinement_criteria = tk.BooleanVar(value=False)
         
         # Visualization
         self.var_nx_plot = tk.IntVar(value=101)
@@ -345,50 +375,117 @@ Time Integration:
         self.toggle_reactions()
         
     def create_amr_tab(self):
-        """Create AMR settings tab."""
+        """Create AMR settings tab with backend selection."""
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="AMR")
         
         # Enable AMR checkbox
         self.enable_amr_check = ttk.Checkbutton(tab, text="Enable Adaptive Mesh Refinement", 
-                                               variable=self.var_enable_amr,
-                                               command=self.toggle_amr)
+                                            variable=self.var_enable_amr,
+                                            command=self.toggle_amr)
         self.enable_amr_check.grid(row=0, column=0, columnspan=2, pady=10)
         
-        # AMR parameters frame
-        self.amr_frame = ttk.LabelFrame(tab, text="AMR Parameters")
-        self.amr_frame.grid(row=1, column=0, columnspan=2, pady=10, padx=10, sticky='ew')
+        # AMR Backend selection
+        backend_frame = ttk.LabelFrame(tab, text="AMR Backend")
+        backend_frame.grid(row=1, column=0, columnspan=2, pady=5, padx=10, sticky='ew')
         
-        ttk.Label(self.amr_frame, text="Max Levels:").grid(row=0, column=0, sticky='e', padx=5, pady=5)
-        ttk.Spinbox(self.amr_frame, from_=1, to=5, textvariable=self.var_max_levels, 
-                   width=10).grid(row=0, column=1, sticky='w', padx=5)
+        ttk.Label(backend_frame, text="Backend:").grid(row=0, column=0, sticky='e', padx=5, pady=5)
         
-        ttk.Label(self.amr_frame, text="Refinement Ratio:").grid(row=1, column=0, sticky='e', padx=5, pady=5)
-        ratio_frame = ttk.Frame(self.amr_frame)
+        # Get available backends dynamically
+        from amr.amr_factory import AMRFactory
+        available_backends = [b for b in AMRFactory.get_available_backends() if b != 'none']
+        
+        self.amr_backend_combo = ttk.Combobox(backend_frame, textvariable=self.var_amr_backend,
+                                            values=available_backends,
+                                            state='readonly', width=15)
+        self.amr_backend_combo.grid(row=0, column=1, sticky='w', padx=5)
+        self.amr_backend_combo.bind('<<ComboboxSelected>>', self.on_amr_backend_changed)
+        
+        # Backend info button
+        ttk.Button(backend_frame, text="Info", 
+                command=self.show_backend_info).grid(row=0, column=2, padx=5)
+        
+        # Backend status label
+        self.amr_backend_status = ttk.Label(backend_frame, text="", font=('TkDefaultFont', 9, 'italic'))
+        self.amr_backend_status.grid(row=1, column=0, columnspan=3, pady=5)
+        
+        # Common AMR parameters frame
+        self.amr_common_frame = ttk.LabelFrame(tab, text="Common AMR Parameters")
+        self.amr_common_frame.grid(row=2, column=0, columnspan=2, pady=10, padx=10, sticky='ew')
+        
+        # Common parameters
+        ttk.Label(self.amr_common_frame, text="Max Levels:").grid(row=0, column=0, sticky='e', padx=5, pady=5)
+        ttk.Spinbox(self.amr_common_frame, from_=1, to=5, textvariable=self.var_max_levels, 
+                width=10).grid(row=0, column=1, sticky='w', padx=5)
+        
+        ttk.Label(self.amr_common_frame, text="Refinement Ratio:").grid(row=1, column=0, sticky='e', padx=5, pady=5)
+        ratio_frame = ttk.Frame(self.amr_common_frame)
         ratio_frame.grid(row=1, column=1, sticky='w', padx=5)
         ttk.Radiobutton(ratio_frame, text="2", variable=self.var_refinement_ratio, 
-                       value=2).pack(side='left')
+                    value=2).pack(side='left')
         ttk.Radiobutton(ratio_frame, text="4", variable=self.var_refinement_ratio, 
-                       value=4).pack(side='left')
+                    value=4).pack(side='left')
         
-        ttk.Label(self.amr_frame, text="Refine Threshold:").grid(row=2, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(self.amr_frame, textvariable=self.var_refine_threshold, width=15).grid(row=2, column=1, sticky='w', padx=5)
+        ttk.Label(self.amr_common_frame, text="Regrid Interval:").grid(row=2, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_common_frame, textvariable=self.var_regrid_interval, width=10).grid(row=2, column=1, sticky='w', padx=5)
         
-        ttk.Label(self.amr_frame, text="Coarsen Threshold:").grid(row=3, column=0, sticky='e', padx=5, pady=5)
-        ttk.Entry(self.amr_frame, textvariable=self.var_coarsen_threshold, width=15).grid(row=3, column=1, sticky='w', padx=5)
+        # Simple AMR parameters frame
+        self.amr_simple_frame = ttk.LabelFrame(tab, text="Simple AMR Parameters")
+        self.amr_simple_frame.grid(row=3, column=0, columnspan=2, pady=5, padx=10, sticky='ew')
         
-        # Info about AMR
-        info_text = """
-AMR adaptively refines the mesh in regions with high gradients.
-This can significantly reduce computational cost while maintaining accuracy.
-
-Note: AMR is experimental in this implementation.
-        """
-        info_label = ttk.Label(self.amr_frame, text=info_text, justify='left', 
-                              font=('TkDefaultFont', 9))
-        info_label.grid(row=4, column=0, columnspan=2, pady=10, padx=10)
+        ttk.Label(self.amr_simple_frame, text="Refine Threshold:").grid(row=0, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_simple_frame, textvariable=self.var_refine_threshold, width=15).grid(row=0, column=1, sticky='w', padx=5)
         
+        ttk.Label(self.amr_simple_frame, text="Coarsen Threshold:").grid(row=1, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_simple_frame, textvariable=self.var_coarsen_threshold, width=15).grid(row=1, column=1, sticky='w', padx=5)
+        
+        # AMReX parameters frame
+        self.amr_amrex_frame = ttk.LabelFrame(tab, text="AMReX Parameters")
+        self.amr_amrex_frame.grid(row=4, column=0, columnspan=2, pady=5, padx=10, sticky='ew')
+        
+        # AMReX specific parameters
+        ttk.Label(self.amr_amrex_frame, text="Max Grid Size:").grid(row=0, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_amrex_frame, textvariable=self.var_amrex_max_grid_size, width=10).grid(row=0, column=1, sticky='w', padx=5)
+        
+        ttk.Label(self.amr_amrex_frame, text="Blocking Factor:").grid(row=1, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_amrex_frame, textvariable=self.var_amrex_blocking_factor, width=10).grid(row=1, column=1, sticky='w', padx=5)
+        
+        ttk.Label(self.amr_amrex_frame, text="Grid Efficiency:").grid(row=2, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_amrex_frame, textvariable=self.var_amrex_grid_eff, width=10).grid(row=2, column=1, sticky='w', padx=5)
+        
+        ttk.Label(self.amr_amrex_frame, text="Error Buffer Cells:").grid(row=3, column=0, sticky='e', padx=5, pady=5)
+        ttk.Entry(self.amr_amrex_frame, textvariable=self.var_amrex_n_error_buf, width=10).grid(row=3, column=1, sticky='w', padx=5)
+        
+        # AMR visualization options
+        viz_frame = ttk.LabelFrame(tab, text="AMR Visualization")
+        viz_frame.grid(row=5, column=0, columnspan=2, pady=5, padx=10, sticky='ew')
+        
+        ttk.Checkbutton(viz_frame, text="Show AMR grid structure", 
+                    variable=self.var_show_amr_grid).pack(anchor='w', padx=5, pady=2)
+        ttk.Checkbutton(viz_frame, text="Color by refinement level", 
+                    variable=self.var_color_by_level).pack(anchor='w', padx=5, pady=2)
+        ttk.Checkbutton(viz_frame, text="Show refinement criteria", 
+                    variable=self.var_show_refinement_criteria).pack(anchor='w', padx=5, pady=2)
+        ttk.Button(viz_frame, text="Preview AMR Grid", 
+          command=self.preview_amr_grid).pack(pady=10)
+        # Info text
+        info_frame = ttk.Frame(tab)
+        info_frame.grid(row=6, column=0, columnspan=2, pady=10, padx=10, sticky='ew')
+        
+        self.amr_info_text = tk.Text(info_frame, height=6, width=50, wrap='word',
+                                    font=('TkDefaultFont', 9))
+        self.amr_info_text.pack(side='left', fill='both', expand=True)
+        
+        scrollbar = ttk.Scrollbar(info_frame, orient='vertical', command=self.amr_info_text.yview)
+        scrollbar.pack(side='right', fill='y')
+        self.amr_info_text.config(yscrollcommand=scrollbar.set)
+        
+        # Set default info text
+        self.update_amr_info()
+        
+        # Initialize UI state
         self.toggle_amr()
+        self.on_amr_backend_changed()
         
     def create_visualization_tab(self):
         """Create visualization settings tab."""
@@ -721,12 +818,6 @@ Note: AMR is experimental in this implementation.
             if isinstance(child, ttk.Entry):
                 child.configure(state=state)
                 
-    def toggle_amr(self):
-        """Enable/disable AMR parameters."""
-        state = 'normal' if self.var_enable_amr.get() else 'disabled'
-        for child in self.amr_frame.winfo_children():
-            if isinstance(child, (ttk.Entry, ttk.Spinbox)):
-                child.configure(state=state)
                 
     def browse_image(self):
         """Browse for image file."""
@@ -851,9 +942,197 @@ Note: AMR is experimental in this implementation.
         # Re-enable visualization checkboxes
         self.show_centerlines_check.config(state='normal')
         self.create_animation_check.config(state='normal')
+    
+    def toggle_amr(self):
+        """Enable/disable AMR parameters based on checkbox."""
+        state = 'normal' if self.var_enable_amr.get() else 'disabled'
+        
+        # Enable/disable backend selection
+        self.amr_backend_combo.configure(state='readonly' if self.var_enable_amr.get() else 'disabled')
+        
+        # Enable/disable all parameter frames
+        for frame in [self.amr_common_frame, self.amr_simple_frame, self.amr_amrex_frame]:
+            for child in frame.winfo_children():
+                if isinstance(child, (ttk.Entry, ttk.Spinbox)):
+                    child.configure(state=state)
+                elif isinstance(child, ttk.Frame):
+                    for subchild in child.winfo_children():
+                        if isinstance(subchild, ttk.Radiobutton):
+                            subchild.configure(state=state)
+                            
+        # Update which parameter frames are shown
+        if self.var_enable_amr.get():
+            self.on_amr_backend_changed()
+        else:
+            self.amr_simple_frame.grid_remove()
+            self.amr_amrex_frame.grid_remove()
+
+
+    def on_amr_backend_changed(self, event=None):
+        """Handle AMR backend selection change."""
+        if not self.var_enable_amr.get():
+            return
             
+        backend = self.var_amr_backend.get()
+        
+        # Hide all backend-specific frames
+        self.amr_simple_frame.grid_remove()
+        self.amr_amrex_frame.grid_remove()
+        
+        # Show appropriate frame
+        if backend == 'simple':
+            self.amr_simple_frame.grid()
+        elif backend == 'amrex':
+            self.amr_amrex_frame.grid()
+            
+        # Update status and info
+        self.update_backend_status()
+        self.update_amr_info()
+
+
+    def update_backend_status(self):
+        """Update AMR backend status label."""
+        from amr.amr_factory import AMRFactory
+        
+        backend = self.var_amr_backend.get()
+        info = AMRFactory.get_backend_info(backend)
+        
+        if info['available']:
+            self.amr_backend_status.config(text=f"✓ {backend} backend available", 
+                                        foreground='green')
+        else:
+            self.amr_backend_status.config(text=f"✗ {backend} backend not available - check requirements", 
+                                        foreground='red')
+
+
+    def show_backend_info(self):
+        """Show detailed information about selected AMR backend."""
+        from amr.amr_factory import AMRFactory
+        
+        backend = self.var_amr_backend.get()
+        info = AMRFactory.get_backend_info(backend)
+        
+        # Create info window
+        info_window = tk.Toplevel(self.master)
+        info_window.title(f"{info['name']} Information")
+        info_window.geometry("500x400")
+        
+        # Create text widget with info
+        text = tk.Text(info_window, wrap='word', padx=10, pady=10)
+        text.pack(fill='both', expand=True)
+        
+        # Format and insert information
+        text.insert('end', f"{info['name']}\n", 'title')
+        text.insert('end', f"{'-' * 40}\n\n")
+        
+        text.insert('end', f"Description:\n", 'heading')
+        text.insert('end', f"{info['description']}\n\n")
+        
+        text.insert('end', f"Status: ", 'heading')
+        if info['available']:
+            text.insert('end', "Available\n\n", 'available')
+        else:
+            text.insert('end', "Not Available\n\n", 'unavailable')
+        
+        if info.get('features'):
+            text.insert('end', "Features:\n", 'heading')
+            for feature in info['features']:
+                text.insert('end', f"  • {feature}\n")
+            text.insert('end', "\n")
+        
+        if info.get('requirements'):
+            text.insert('end', "Requirements:\n", 'heading')
+            for req in info['requirements']:
+                text.insert('end', f"  • {req}\n")
+            text.insert('end', "\n")
+        
+        text.insert('end', "Capabilities:\n", 'heading')
+        text.insert('end', f"  • Parallel: {'Yes' if info.get('parallel') else 'No'}\n")
+        text.insert('end', f"  • GPU Support: {'Yes' if info.get('gpu_support') else 'No'}\n")
+        
+        # Configure tags
+        text.tag_config('title', font=('TkDefaultFont', 14, 'bold'))
+        text.tag_config('heading', font=('TkDefaultFont', 10, 'bold'))
+        text.tag_config('available', foreground='green', font=('TkDefaultFont', 10, 'bold'))
+        text.tag_config('unavailable', foreground='red', font=('TkDefaultFont', 10, 'bold'))
+        
+        text.config(state='disabled')
+        
+        # Add close button
+        ttk.Button(info_window, text="Close", 
+                command=info_window.destroy).pack(pady=10)
+
+
+    def update_amr_info(self):
+        """Update AMR info text based on selected backend."""
+        self.amr_info_text.config(state='normal')
+        self.amr_info_text.delete('1.0', 'end')
+        
+        if not self.var_enable_amr.get():
+            self.amr_info_text.insert('end', "AMR is disabled. Enable to use adaptive mesh refinement.")
+        else:
+            backend = self.var_amr_backend.get()
+            
+            if backend == 'simple':
+                info = """Simple AMR uses a quadtree-based refinement strategy with the following features:
+    • Basic block-structured refinement
+    • Gradient-based error indicators
+    • Time subcycling for efficiency
+    • Python-based implementation
+
+    Good for: Learning, prototyping, moderate scale problems
+    Limitations: No MPI parallelism, simplified flux correction"""
+                
+            elif backend == 'amrex':
+                info = """AMReX provides state-of-the-art AMR capabilities:
+    • Full Berger-Oliger AMR algorithm
+    • MPI+OpenMP parallel execution
+    • GPU acceleration support
+    • Automatic load balancing
+    • Conservative flux correction
+    • Built-in I/O and visualization
+
+    Good for: Production runs, large-scale problems, HPC systems
+    Note: Requires pyAMReX installation"""
+                
+            self.amr_info_text.insert('end', info)
+        
+        self.amr_info_text.config(state='disabled')
+
+
+    def get_amr_config(self):
+        """Get AMR configuration based on GUI settings."""
+        if not self.var_enable_amr.get():
+            return None
+            
+        backend = self.var_amr_backend.get()
+        
+        # Common parameters
+        config = {
+            'backend': backend,
+            'max_levels': self.var_max_levels.get(),
+            'refinement_ratio': self.var_refinement_ratio.get(),
+            'regrid_interval': self.var_regrid_interval.get(),
+        }
+        
+        # Backend-specific parameters
+        if backend == 'simple':
+            config.update({
+                'refine_threshold': self.var_refine_threshold.get(),
+                'coarsen_threshold': self.var_coarsen_threshold.get(),
+            })
+        elif backend == 'amrex':
+            config.update({
+                'max_grid_size': self.var_amrex_max_grid_size.get(),
+                'blocking_factor': self.var_amrex_blocking_factor.get(),
+                'grid_eff': self.var_amrex_grid_eff.get(),
+                'n_error_buf': self.var_amrex_n_error_buf.get(),
+            })
+            
+        return config
+
     def run_simulation(self):
-        """Run the FV simulation with single computation pass."""
+        """Run the FV simulation with optional AMR support."""
         if self.simulation_running:
             messagebox.showwarning("Warning", "Simulation already running!")
             return
@@ -875,11 +1154,27 @@ Note: AMR is experimental in this implementation.
             print(f"Spatial order: {config['spatial_order']}")
             print(f"Time integration: {config['time_integration']}")
             print(f"Reactions: {'Enabled' if config['enable_reactions'] else 'Disabled'}")
-            print(f"AMR: {'Enabled' if config['enable_amr'] else 'Disabled'}")
+            
+            # AMR information
+            if config['enable_amr']:
+                print(f"AMR: Enabled - Backend: {config['amr_backend']}")
+                print(f"     Max levels: {config['max_levels']}")
+                print(f"     Refinement ratio: {config['refinement_ratio']}")
+            else:
+                print("AMR: Disabled")
+                
             print(f"Simulation time: {config['total_time']} s")
             print(f"Centerline collection: {'Enabled' if config['show_centerlines'] else 'Disabled'}")
             print(f"Animation creation: {'Enabled' if config['create_animation'] else 'Disabled'}")
             print("="*50 + "\n")
+            
+            # Import required modules
+            from mesh import FVMesh
+            from solver import FVHeatSolver
+            from postprocessor import FVPostProcessor
+            from initial_conditions import get_fv_initial_condition
+            from animation import create_fv_animation_from_history, plot_fv_solution_snapshots_from_history
+            from amr.amr_factory import AMRFactory
             
             # Create mesh
             mesh = FVMesh(
@@ -897,6 +1192,30 @@ Note: AMR is experimental in this implementation.
                 time_integration=config['time_integration'],
                 enable_reactions=config['enable_reactions']
             )
+            
+            # Set up AMR if enabled
+            amr_system = None
+            if config['enable_amr']:
+                amr_config = self.get_amr_config()
+                
+                try:
+                    amr_system = AMRFactory.create_amr(
+                        backend=config['amr_backend'],
+                        base_solver=solver,
+                        config=amr_config
+                    )
+                    
+                    if amr_system is not None:
+                        solver.set_amr_system(amr_system)
+                        print(f"AMR system initialized: {type(amr_system).__name__}")
+                    else:
+                        print("Failed to create AMR system")
+                        
+                except Exception as e:
+                    print(f"Error initializing AMR: {e}")
+                    messagebox.showwarning("AMR Warning", 
+                        f"Failed to initialize AMR: {e}\nContinuing without AMR.")
+                    amr_system = None
             
             # Enable centerline collection if requested
             if config['show_centerlines']:
@@ -922,20 +1241,8 @@ Note: AMR is experimental in this implementation.
             
             # Setup reactions if enabled
             if config['enable_reactions']:
-                # Import reaction model (implement this based on your needs)
                 messagebox.showinfo("Info", "Reaction models not yet implemented")
-                
-            # Setup AMR if enabled
-            amr_system = None
-            if config['enable_amr']:
-                amr_system = SimpleAMR(
-                    base_solver=solver,
-                    max_levels=config['max_levels'],
-                    refinement_ratio=config['refinement_ratio'],
-                    refine_threshold=config['refine_threshold'],
-                    coarsen_threshold=config['coarsen_threshold']
-                )
-                
+            
             # Create post-processor
             postprocessor = FVPostProcessor(mesh)
             
@@ -946,13 +1253,20 @@ Note: AMR is experimental in this implementation.
                 dt = solver.compute_stable_timestep(config['cfl'])
                 print(f"Auto-computed time step: {dt:.3e} s")
             
-            # Print some diagnostics
+            # Print diagnostics
             print(f"\nSimulation parameters:")
             print(f"  Thermal diffusivity α = {config['alpha']:.2e} m²/s")
             print(f"  Cell size: Δx = {mesh.dx:.3e} m, Δy = {mesh.dy:.3e} m")
             print(f"  Time step: Δt = {dt:.3e} s")
             print(f"  Diffusion number: α*Δt/Δx² = {config['alpha']*dt/mesh.dx**2:.3f}")
             print(f"  Expected diffusion length at t=10s: L ≈ √(4αt) = {np.sqrt(4*config['alpha']*10):.3f} m")
+            
+            # Print AMR info if enabled
+            if amr_system is not None:
+                amr_stats = amr_system.get_statistics()
+                print(f"\nAMR initial statistics:")
+                print(f"  Total cells: {amr_stats['total_cells']:,}")
+                print(f"  Base level cells: {amr_stats['cells_per_level'].get(0, 0):,}")
                 
             # Get hotspot parameters for visualization
             hotspot_params = None
@@ -963,14 +1277,11 @@ Note: AMR is experimental in this implementation.
                     'radius': config['hotspot_radius']
                 }
             
-            # Create mesh visualization if grid is small enough
-            if solver.mesh.nx <= 50 and solver.mesh.ny <= 50:
-                fig_mesh, ax_mesh = postprocessor.plot_mesh_with_solution(
-                    solver, 
-                    show_values=(solver.mesh.nx <= 20 and solver.mesh.ny <= 20),
-                    show_hotspot=config.get('show_hotspot', False),
-                    hotspot_params=hotspot_params
-                )
+            # Show AMR grid structure if requested
+            if amr_system is not None and config.get('show_amr_grid', False):
+                fig_amr = plt.figure(figsize=(8, 8))
+                ax_amr = fig_amr.add_subplot(111)
+                amr_system.plot_grid_structure(ax_amr, show_levels=config.get('color_by_level', True))
                 plt.show()
             
             # Main simulation loop
@@ -979,80 +1290,133 @@ Note: AMR is experimental in this implementation.
             
             # Store initial solution
             print("Storing initial solution...")
-            sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+            if amr_system is not None:
+                # Get composite solution from AMR
+                composite = solver.get_solution_for_visualization(use_amr_composite=True)
+                sol = {
+                    'T': composite['data'],
+                    'x': composite['x'],
+                    'y': composite['y'],
+                    'level_map': composite.get('level_map')
+                }
+            else:
+                # Regular solution
+                sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+            
             solution_snapshots.append((0.0, sol))
             
             # Prepare for animation if requested
             animation_frames = []
             if config['create_animation']:
-                # Store initial frame
                 frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
                 frame_data['time'] = 0.0
                 animation_frames.append(frame_data)
             
-            # Run simulation to each time point and collect data
+            # Run simulation
             print("\nRunning simulation...")
             
-            # If animation is requested, we need to collect frames at regular intervals
+            # Choose advance method based on whether AMR is enabled
+            if amr_system is not None:
+                advance_method = solver.advance_to_time_with_amr
+            else:
+                advance_method = solver.advance_to_time
+            
+            # Animation frame collection logic (same as before)
             if config['create_animation']:
-                # Calculate all frame times for the entire simulation
                 frame_dt = dt * config['frame_skip']
                 all_frame_times = np.arange(0, config['total_time'] + frame_dt, frame_dt)
-                # Ensure we have a frame at the final time
                 if all_frame_times[-1] < config['total_time']:
                     all_frame_times = np.append(all_frame_times, config['total_time'])
                 
-                # Merge output times with frame times and sort
                 all_times = sorted(set(list(time_points[1:]) + list(all_frame_times)))
                 frame_time_set = set(all_frame_times)
                 output_time_set = set(time_points[1:])
                 
-                # Advance through all times
                 for target_time in all_times:
-                    # Check if this is an output time
                     is_output_time = target_time in output_time_set
                     
-                    # Advance to this time, only collect centerline at output times
-                    solver.advance_to_time(target_time, dt, 
-                                         show_progress=is_output_time,
-                                         collect_interval=None,  # Don't collect during advance
-                                         collect_at_target=is_output_time and config['show_centerlines'])
+                    advance_method(target_time, dt, 
+                                show_progress=is_output_time,
+                                collect_interval=None,
+                                collect_at_target=is_output_time and config['show_centerlines'])
                     
-                    # Store solution snapshot ONLY at specified output times
                     if is_output_time:
                         print(f"Storing solution snapshot at t = {solver.current_time:.3f} s")
-                        sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                        
+                        # Get solution (AMR composite or regular)
+                        if amr_system is not None:
+                            composite = solver.get_solution_for_visualization(use_amr_composite=True)
+                            sol = {
+                                'T': composite['data'],
+                                'x': composite['x'],
+                                'y': composite['y'],
+                                'level_map': composite.get('level_map')
+                            }
+                        else:
+                            sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                        
                         solution_snapshots.append((solver.current_time, sol))
+                        
+                        # Print AMR statistics if enabled
+                        if amr_system is not None:
+                            amr_stats = amr_system.get_statistics()
+                            print(f"  AMR: {amr_stats['total_cells']:,} cells, "
+                                f"efficiency: {amr_stats['efficiency']:.1%}")
                     
-                    # Store animation frame at frame times
                     if target_time in frame_time_set:
                         frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
                         frame_data['time'] = solver.current_time
                         animation_frames.append(frame_data)
             else:
-                # No animation - just advance to output times
+                # No animation - just output times
                 for target_time in time_points[1:]:
                     print(f"\nAdvancing to t = {target_time} s")
                     
-                    # Advance to target time, collect centerline only at target
-                    solver.advance_to_time(target_time, dt, show_progress=True,
-                                         collect_interval=None,  # Don't collect during advance
-                                         collect_at_target=config['show_centerlines'])
+                    advance_method(target_time, dt, show_progress=True,
+                                collect_interval=None,
+                                collect_at_target=config['show_centerlines'])
                     
-                    # Store solution snapshot at this time point
                     print(f"Storing solution snapshot at t = {solver.current_time:.3f} s")
-                    sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                    
+                    if amr_system is not None:
+                        composite = solver.get_solution_for_visualization(use_amr_composite=True)
+                        sol = {
+                            'T': composite['data'],
+                            'x': composite['x'],
+                            'y': composite['y'],
+                            'level_map': composite.get('level_map')
+                        }
+                        
+                        # Print AMR statistics
+                        amr_stats = amr_system.get_statistics()
+                        print(f"  AMR: {amr_stats['total_cells']:,} cells, "
+                            f"efficiency: {amr_stats['efficiency']:.1%}")
+                    else:
+                        sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                    
                     solution_snapshots.append((solver.current_time, sol))
             
             print("\nSimulation completed!")
-            print(f"Collected {len(solution_snapshots)} solution snapshots at specified output times")
+            print(f"Collected {len(solution_snapshots)} solution snapshots")
             if config['create_animation']:
                 print(f"Collected {len(animation_frames)} frames for animation")
             
-            # Import the new plotting function
+            # Final AMR statistics
+            if amr_system is not None:
+                print("\nFinal AMR statistics:")
+                final_stats = amr_system.get_statistics()
+                print(f"  Total cells: {final_stats['total_cells']:,}")
+                for level, count in final_stats['cells_per_level'].items():
+                    print(f"  Level {level}: {count:,} cells")
+                print(f"  Efficiency: {final_stats['efficiency']:.1%}")
+                
+                # Memory usage
+                memory = amr_system.get_memory_usage()
+                print(f"  Memory usage: {memory['total_mb']:.1f} MB")
+            
+            # Visualization (same as before but with AMR overlay option)
             from animation import plot_fv_solution_snapshots_from_history
             
-            # Plot solution snapshots from collected data
             print("\nPlotting solution snapshots...")
             fig = plot_fv_solution_snapshots_from_history(
                 solution_snapshots,
@@ -1063,9 +1427,15 @@ Note: AMR is experimental in this implementation.
                 show_hotspot=config.get('show_hotspot', False),
                 hotspot_params=hotspot_params
             )
+            
+            # Add AMR level overlay if available
+            if amr_system is not None and config.get('color_by_level', False):
+                # Would add level coloring to the plots
+                pass
+            
             plt.show()
             
-            # Plot centerlines if data was collected
+            # Plot centerlines if collected
             if config['show_centerlines']:
                 centerline_history = solver.get_centerline_history()
                 if centerline_history is not None:
@@ -1076,8 +1446,6 @@ Note: AMR is experimental in this implementation.
                         show_mesh_lines=config.get('show_mesh', False)
                     )
                     plt.show()
-                else:
-                    print("No centerline data available")
             
             # Create animation if requested
             if config['create_animation'] and len(animation_frames) > 0:
@@ -1090,7 +1458,16 @@ Note: AMR is experimental in this implementation.
                     save_animation=config['save_animation']
                 )
                 plt.show()
-                
+            
+            # Show final AMR grid if requested
+            if amr_system is not None and config.get('show_amr_grid', False):
+                print("\nShowing final AMR grid structure...")
+                fig_final = plt.figure(figsize=(8, 8))
+                ax_final = fig_final.add_subplot(111)
+                amr_system.plot_grid_structure(ax_final, show_levels=True)
+                ax_final.set_title('Final AMR Grid Structure')
+                plt.show()
+            
             self.status_label.config(text="Simulation completed!")
             
         except Exception as e:
@@ -1101,8 +1478,117 @@ Note: AMR is experimental in this implementation.
         finally:
             self.progress.stop()
             self.enable_controls_after_simulation()
-
-
+            
+    def preview_amr_grid(self):
+        """Preview AMR grid structure without running simulation."""
+        if not self.var_enable_amr.get():
+            messagebox.showinfo("Info", "Please enable AMR first")
+            return
+        
+        try:
+            # Get configuration
+            config = self.get_config_dict()
+            
+            # Create mesh and solver
+            from mesh import FVMesh
+            from solver import FVHeatSolver
+            from initial_conditions import get_fv_initial_condition
+            from amr.amr_factory import AMRFactory
+            
+            # Create mesh
+            mesh = FVMesh(
+                nx_cells=config['nx_cells'],
+                ny_cells=config['ny_cells'],
+                plate_length=config['plate_length'],
+                plate_width=config['plate_width']
+            )
+            
+            # Create solver
+            solver = FVHeatSolver(
+                mesh=mesh,
+                alpha=config['alpha'],
+                spatial_order=config['spatial_order'],
+                time_integration=config['time_integration'],
+                enable_reactions=config['enable_reactions']
+            )
+            
+            # Set initial condition
+            ic_params = {
+                'background_temp': config['background_temp'],
+                'hotspot_temp': config['hotspot_temp'],
+                'center_x': config['center_x'],
+                'center_y': config['center_y'],
+                'hotspot_radius': config['hotspot_radius'],
+                'smooth_transition': config['smooth_transition'],
+                'transition_width': config['transition_width'],
+            }
+            
+            ic = get_fv_initial_condition(config['ic_type'], ic_params)
+            ic.set(solver)
+            
+            # Create AMR system
+            amr_config = self.get_amr_config()
+            amr_system = AMRFactory.create_amr(
+                backend=config['amr_backend'],
+                base_solver=solver,
+                config=amr_config
+            )
+            
+            if amr_system is not None:
+                # Plot grid structure
+                import matplotlib.pyplot as plt
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+                
+                # Left: Grid structure
+                amr_system.plot_grid_structure(ax1, show_levels=True)
+                
+                # Right: Initial temperature with grid overlay
+                sol = amr_system.get_composite_solution('T')
+                X, Y = np.meshgrid(sol['x'], sol['y'])
+                
+                cs = ax2.contourf(X, Y, sol['data'], levels=50, cmap='hot')
+                plt.colorbar(cs, ax=ax2, label='Temperature (K)')
+                
+                # Overlay grid structure
+                amr_system.plot_grid_structure(ax2, show_levels=True)
+                ax2.set_title('Initial Temperature with AMR Grid')
+                
+                # Show statistics
+                stats = amr_system.get_statistics()
+                info_text = (f"Total cells: {stats['total_cells']:,}\n"
+                            f"Efficiency: {stats['efficiency']:.1%}\n")
+                for level, count in stats['cells_per_level'].items():
+                    info_text += f"Level {level}: {count:,} cells\n"
+                
+                ax1.text(0.02, 0.02, info_text, transform=ax1.transAxes,
+                        verticalalignment='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                
+                plt.tight_layout()
+                plt.show()
+                
+                # Also show refinement criteria
+                fig2, ax = plt.subplots(figsize=(8, 8))
+                indicators = amr_system.compute_refinement_indicators(0)
+                
+                im = ax.imshow(indicators, cmap='viridis', origin='lower')
+                plt.colorbar(im, ax=ax, label='Refinement Indicator')
+                ax.set_title('Refinement Criteria (Base Level)')
+                ax.set_xlabel('X cells')
+                ax.set_ylabel('Y cells')
+                
+                # Add threshold line
+                threshold = amr_config.get('refine_threshold', 100.0)
+                ax.axhline(y=threshold, color='red', linestyle='--', 
+                        label=f'Threshold: {threshold}')
+                
+                plt.show()
+            else:
+                messagebox.showerror("Error", "Failed to create AMR system")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to preview AMR grid:\n{str(e)}")
+            
 def main():
     """Main entry point."""
     root = tk.Tk()
