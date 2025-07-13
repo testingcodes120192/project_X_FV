@@ -398,7 +398,8 @@ class FVHeatSolver:
         self.step_count += 1
         self._update_statistics()
         
-    def advance_to_time(self, target_time, dt, show_progress=True, collect_interval=None):
+    def advance_to_time(self, target_time, dt, show_progress=True, collect_interval=None, 
+                       collect_at_target=False):
         """
         Advance solution to target time.
         
@@ -411,7 +412,9 @@ class FVHeatSolver:
         show_progress : bool
             Show progress bar
         collect_interval : float, optional
-            Interval for collecting centerline data (None = every step)
+            Interval for collecting centerline data (None = don't collect during advance)
+        collect_at_target : bool
+            Whether to collect centerline data when reaching target time
             
         Returns
         -------
@@ -431,19 +434,17 @@ class FVHeatSolver:
             # Take time step
             self.advance(step_dt)
             
-            # Collect centerline data if enabled
-            if self.collect_centerlines:
-                if collect_interval is None:
-                    self._collect_centerline_data()
-                elif self.current_time - last_collect_time >= collect_interval:
+            # Collect centerline data if enabled and interval specified
+            if self.collect_centerlines and collect_interval is not None:
+                if self.current_time - last_collect_time >= collect_interval:
                     self._collect_centerline_data()
                     last_collect_time = self.current_time
             
             if show_progress:
                 pbar.update(step_dt)
                 
-        # Make sure to collect at target time
-        if self.collect_centerlines and self.current_time >= target_time - 1e-10:
+        # Collect at target time if requested
+        if self.collect_centerlines and collect_at_target and self.current_time >= target_time - 1e-10:
             self._collect_centerline_data()
                 
         if show_progress:

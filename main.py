@@ -992,40 +992,62 @@ Note: AMR is experimental in this implementation.
             
             # Run simulation to each time point and collect data
             print("\nRunning simulation...")
-            for i, target_time in enumerate(time_points[1:]):
-                print(f"\nAdvancing to t = {target_time} s")
+            
+            # If animation is requested, we need to collect frames at regular intervals
+            if config['create_animation']:
+                # Calculate all frame times for the entire simulation
+                frame_dt = dt * config['frame_skip']
+                all_frame_times = np.arange(0, config['total_time'] + frame_dt, frame_dt)
+                # Ensure we have a frame at the final time
+                if all_frame_times[-1] < config['total_time']:
+                    all_frame_times = np.append(all_frame_times, config['total_time'])
                 
-                # For animation, collect frames during advancement
-                if config['create_animation']:
-                    # Calculate intermediate frame times
-                    current_time = solver.current_time
-                    frame_dt = dt * config['frame_skip']
-                    frame_times = np.arange(current_time + frame_dt, target_time, frame_dt)
+                # Merge output times with frame times and sort
+                all_times = sorted(set(list(time_points[1:]) + list(all_frame_times)))
+                frame_time_set = set(all_frame_times)
+                output_time_set = set(time_points[1:])
+                
+                # Advance through all times
+                for target_time in all_times:
+                    # Check if this is an output time
+                    is_output_time = target_time in output_time_set
                     
-                    # Advance to each frame time
-                    for frame_time in frame_times:
-                        solver.advance_to_time(frame_time, dt, show_progress=False)
+                    # Advance to this time, only collect centerline at output times
+                    solver.advance_to_time(target_time, dt, 
+                                         show_progress=is_output_time,
+                                         collect_interval=None,  # Don't collect during advance
+                                         collect_at_target=is_output_time and config['show_centerlines'])
+                    
+                    # Store solution snapshot ONLY at specified output times
+                    if is_output_time:
+                        print(f"Storing solution snapshot at t = {solver.current_time:.3f} s")
+                        sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                        solution_snapshots.append((solver.current_time, sol))
+                    
+                    # Store animation frame at frame times
+                    if target_time in frame_time_set:
                         frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
                         frame_data['time'] = solver.current_time
                         animation_frames.append(frame_data)
-                
-                # Advance to target time
-                solver.advance_to_time(target_time, dt, show_progress=True, 
-                                     collect_interval=dt*10 if config['show_centerlines'] else None)
-                
-                # Store solution snapshot at this time point
-                print(f"Storing solution at t = {solver.current_time:.3f} s")
-                sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
-                solution_snapshots.append((solver.current_time, sol))
-                
-                # Store frame for animation at target time
-                if config['create_animation']:
-                    frame_data = postprocessor.prepare_animation_frame(solver, config['nx_plot'], config['ny_plot'])
-                    frame_data['time'] = solver.current_time
-                    animation_frames.append(frame_data)
+            else:
+                # No animation - just advance to output times
+                for target_time in time_points[1:]:
+                    print(f"\nAdvancing to t = {target_time} s")
+                    
+                    # Advance to target time, collect centerline only at target
+                    solver.advance_to_time(target_time, dt, show_progress=True,
+                                         collect_interval=None,  # Don't collect during advance
+                                         collect_at_target=config['show_centerlines'])
+                    
+                    # Store solution snapshot at this time point
+                    print(f"Storing solution snapshot at t = {solver.current_time:.3f} s")
+                    sol = postprocessor.get_solution_on_grid(solver, config['nx_plot'], config['ny_plot'], smooth=True)
+                    solution_snapshots.append((solver.current_time, sol))
             
             print("\nSimulation completed!")
-            print(f"Collected {len(solution_snapshots)} solution snapshots")
+            print(f"Collected {len(solution_snapshots)} solution snapshots at specified output times")
+            if config['create_animation']:
+                print(f"Collected {len(animation_frames)} frames for animation")
             
             # Import the new plotting function
             from animation import plot_fv_solution_snapshots_from_history
