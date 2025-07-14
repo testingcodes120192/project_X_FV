@@ -106,8 +106,19 @@ class AMReXAMR(BaseAMR):
         self.has_flux_register = hasattr(amr, 'FluxRegister')
         self.has_average_down = hasattr(amr, 'average_down')
         
+        # Workflow control flags
+        self.initial_levels = config.get('initial_levels', 1)
+        self.adapt_after_ic = config.get('adapt_after_ic', True)
+        self.show_before_adapt = config.get('show_before_adapt', False)
+        self.temp_threshold = config.get('temp_threshold', 500.0)
+        self.show_error_indicator = config.get('show_error_indicator', False)
+        
+        # State tracking
+        self.base_initialized = False
+        self.adapted = False
+        
     def initialize(self):
-        """Initialize the AMR hierarchy."""
+        """Initialize only the base grid structure."""
         # Initialize AMReX if not already done
         if not self.amrex_initialized:
             self._initialize_amrex()
@@ -115,20 +126,75 @@ class AMReXAMR(BaseAMR):
         # Initialize level solvers list
         self.level_solvers = []
         
-        # Create base level
+        # Create base level only
         self._make_base_level()
         
         # Base level uses the provided base solver
         self.level_solvers.append(self.base_solver)
         
-        # Set initial data from base solver
-        self._set_initial_data()
+        # Mark as initialized but not adapted
+        self.base_initialized = True
+        self.adapted = False
         
-        # Do initial refinement
-        if self.config.get('initial_refinement', True):
-            self._initial_refinement()
+        print(f"AMReX AMR initialized with base level only ({self.n_cell_base[0]}×{self.n_cell_base[1]} cells)")
+        print("Ready for initial condition setup")
+    
+    def adapt_to_initial_condition(self):
+        """Adapt the grid based on the current solution in the base solver."""
+        if not self.base_initialized:
+            raise RuntimeError("Base grid not initialized. Call initialize() first.")
             
-        print(f"AMReX AMR initialized with {len(self.levels)} levels")
+        if self.adapted:
+            print("Grid already adapted")
+            return
+            
+        print("\n" + "="*60)
+        print("Adapting AMR grid to initial condition")
+        print("="*60)
+        
+        # First sync the current solution from solver to AMReX
+        print("Syncing initial condition to AMReX...")
+        self._sync_solver_to_amrex(0)
+        
+        # Fill ghost cells for gradient computation
+        self._fill_patch(0, self.levels[0].temperature)
+        
+        # Print temperature statistics
+        self._print_temperature_stats(0)
+        
+        # Now perform initial refinement based on actual data
+        levels_created = 0
+        
+        for level in range(self.max_levels - 1):
+            print(f"\nChecking level {level} for refinement...")
+            
+            # Compute error indicators from actual temperature field
+            error_indicator, tagged_boxes = self._compute_error_indicator_from_data(level)
+            
+            if error_indicator is not None and self.show_error_indicator:
+                self._visualize_error_indicator(level, error_indicator)
+            
+            # Check if any cells need refinement
+            if tagged_boxes and len(tagged_boxes) > 0:
+                print(f"  Found {len(tagged_boxes)} boxes to refine at level {level}")
+                
+                # Create refined level
+                self._regrid_level(level + 1, tagged_boxes)
+                levels_created += 1
+                
+                # Print stats for new level
+                self._print_temperature_stats(level + 1)
+            else:
+                print(f"  No refinement needed at level {level}")
+                break
+                
+        self.adapted = True
+        print(f"\nGrid adaptation complete!")
+        print(f"  Created {levels_created} refined levels")
+        print(f"  Total levels: {len(self.levels)}")
+        
+        # Print final statistics
+        self._print_adaptation_summary()
         
     def _initialize_amrex(self):
         """Initialize AMReX framework."""
@@ -275,13 +341,37 @@ class AMReXAMR(BaseAMR):
         geom = amr.Geometry(domain, real_box, coord, is_periodic)
         
         return geom 
+    
     def _set_initial_data(self):
         """Set initial data from base solver."""
-        # Sync base solver data to AMReX
-        self._sync_solver_to_amrex(0)
+        # This method is called during _make_base_level() to initialize the base level
+        # At this point, the base solver might not have the actual IC yet
         
-        # Fill ghost cells
+        # Check if base solver has meaningful data
+        T_interior = self.base_solver.mesh.extract_interior(self.base_solver.T)
+        T_max = np.max(T_interior)
+        T_min = np.min(T_interior)
+        
+        if T_max - T_min < 1.0:  # Essentially uniform
+            # No IC set yet - just use background temperature
+            background_temp = T_interior[0, 0]  # Use first cell value
+            print(f"Initializing base level with uniform temperature: {background_temp:.1f} K")
+            
+            # Set uniform temperature in MultiFab
+            self.levels[0].temperature.set_val(background_temp)
+            
+            if self.base_solver.enable_reactions and self.levels[0].reaction_progress is not None:
+                self.levels[0].reaction_progress.set_val(0.0)
+        else:
+            # IC has been set - sync it to AMReX
+            print(f"Syncing initial data from base solver (T range: {T_min:.1f} - {T_max:.1f} K)")
+            self._sync_solver_to_amrex(0)
+            
+        # Fill ghost cells using boundary conditions
         self._fill_patch(0, self.levels[0].temperature)
+        
+        if self.base_solver.enable_reactions and self.levels[0].reaction_progress is not None:
+            self._fill_patch(0, self.levels[0].reaction_progress)
         
     def _sync_solver_to_amrex(self, level: int):
         """Sync data from solver arrays to AMReX MultiFab."""
@@ -354,26 +444,22 @@ class AMReXAMR(BaseAMR):
         # Convert to numpy for return (simplified)
         return np.ones((1, 1), dtype=bool) if tags.numTags() > 0 else np.zeros((1, 1), dtype=bool)
         
+    
     def _tag_cells_for_refinement(self, level: int):
-        """Tag cells for refinement - simplified for pyAMReX."""
+        """Tag cells for refinement based on temperature gradients."""
         level_data = self.levels[level]
         
-        # In pyAMReX, we don't use TagBoxArray
-        # Instead, return a list of boxes that need refinement
-        tagged_boxes = []
+        # Get threshold - scale by level
+        base_threshold = self.config.get('refine_threshold', 100.0)
+        threshold = base_threshold / (self.refinement_ratio ** level)
         
-        # Check gradient threshold
-        threshold = self.config.get('refine_threshold', 100.0) / (self.refinement_ratio ** level)
+        print(f"  Refinement threshold at level {level}: {threshold:.2f}")
         
-        for mfi in level_data.temperature:
-            bx = mfi.validbox()
-            temp_arr = level_data.temperature.array(mfi)
-            
-            # Check if this box needs refinement
-            if np.max(temp_arr) > 400.0:  # Simple criterion for now
-                tagged_boxes.append(bx)
+        # Compute error indicators and get tagged boxes
+        error_indicator, tagged_boxes = self._compute_error_indicator_from_data(level)
         
         return tagged_boxes
+    
     
     def regrid(self, level: int):
         """Regrid the hierarchy starting from the given level."""
@@ -1438,8 +1524,208 @@ class AMReXAMR(BaseAMR):
                     # Clear the flux register for next time step
                     self.flux_reg[level].setVal(0.0)
                     
+    # Add this method to the AMReXAMR class in amrex_amr.py
 
-    
+    def adapt_to_initial_condition(self):
+        """Adapt the grid based on the current solution in the base solver."""
+        if not self.base_initialized:
+            raise RuntimeError("Base grid not initialized. Call initialize() first.")
+            
+        if self.adapted:
+            print("Grid already adapted")
+            return
+            
+        print("\n" + "="*60)
+        print("Adapting AMReX AMR grid to initial condition")
+        print("="*60)
+        
+        # First sync the current solution from solver to AMReX
+        print("Syncing initial condition to AMReX...")
+        self._sync_solver_to_amrex(0)
+        
+        # Fill ghost cells for gradient computation
+        self._fill_patch(0, self.levels[0].temperature)
+        
+        # Print temperature statistics
+        self._print_temperature_stats(0)
+        
+        # Now perform initial refinement based on actual data
+        levels_created = 0
+        
+        for level in range(self.max_levels - 1):
+            print(f"\nChecking level {level} for refinement...")
+            
+            # Compute error indicators from actual temperature field
+            error_indicator, tagged_boxes = self._compute_error_indicator_from_data(level)
+            
+            if error_indicator is not None and self.config.get('show_error_indicator', False):
+                self._visualize_error_indicator(level, error_indicator)
+            
+            # Check if any cells need refinement
+            if tagged_boxes and len(tagged_boxes) > 0:
+                print(f"  Found {len(tagged_boxes)} boxes to refine at level {level}")
+                
+                # Create refined level
+                self._regrid_level(level + 1, tagged_boxes)
+                levels_created += 1
+                
+                # Print stats for new level
+                self._print_temperature_stats(level + 1)
+            else:
+                print(f"  No refinement needed at level {level}")
+                break
+                
+        self.adapted = True
+        print(f"\nGrid adaptation complete!")
+        print(f"  Created {levels_created} refined levels")
+        print(f"  Total levels: {len(self.levels)}")
+        
+        # Print final statistics
+        self._print_adaptation_summary()
+
+
+    def _compute_error_indicator_from_data(self, level: int):
+        """
+        Compute error indicator from actual temperature data in MultiFab.
+        
+        Returns:
+            error_indicator: numpy array of error values (for visualization)
+            tagged_boxes: list of boxes that need refinement
+        """
+        level_data = self.levels[level]
+        solver = self.level_solvers[level]
+        
+        # Get refinement threshold
+        base_threshold = self.config.get('refine_threshold', 100.0)
+        threshold = base_threshold / (self.refinement_ratio ** level)
+        temp_threshold = self.config.get('temp_threshold', 500.0)
+        
+        tagged_boxes = []
+        
+        # For visualization - create error indicator array
+        nx_level = self.n_cell_base[0] * (self.refinement_ratio ** level)
+        ny_level = self.n_cell_base[1] * (self.refinement_ratio ** level)
+        error_indicator = np.zeros((ny_level, nx_level))
+        
+        # Process each box in this level
+        for mfi in level_data.temperature:
+            bx = mfi.validbox()
+            temp_arr = level_data.temperature.array(mfi)
+            
+            lo = bx.small_end
+            hi = bx.big_end
+            
+            # Compute gradients for this box
+            box_needs_refinement = False
+            
+            for j in range(lo[1], hi[1] + 1):
+                for i in range(lo[0], hi[0] + 1):
+                    # Get temperature value
+                    T = temp_arr[i, j, 0, self.comp_T]
+                    
+                    # Skip if temperature is too low
+                    if T < temp_threshold:
+                        continue
+                    
+                    # Compute gradient using central differences
+                    if lo[0] < i < hi[0] and lo[1] < j < hi[1]:
+                        dTdx = (temp_arr[i+1, j, 0, self.comp_T] - 
+                               temp_arr[i-1, j, 0, self.comp_T]) / (2 * solver.mesh.dx)
+                        dTdy = (temp_arr[i, j+1, 0, self.comp_T] - 
+                               temp_arr[i, j-1, 0, self.comp_T]) / (2 * solver.mesh.dy)
+                        
+                        # Gradient magnitude
+                        grad_mag = np.sqrt(dTdx**2 + dTdy**2)
+                        
+                        # Store in error indicator array
+                        if 0 <= i < nx_level and 0 <= j < ny_level:
+                            error_indicator[j, i] = grad_mag
+                        
+                        # Check against threshold
+                        if grad_mag > threshold:
+                            box_needs_refinement = True
+            
+            # If this box needs refinement, add it to the list
+            if box_needs_refinement:
+                tagged_boxes.append(bx)
+        
+        print(f"  Error indicator stats: min={np.min(error_indicator):.2f}, "
+              f"max={np.max(error_indicator):.2f}, mean={np.mean(error_indicator):.2f}")
+        
+        return error_indicator, tagged_boxes
+
+
+    def _visualize_error_indicator(self, level: int, error_indicator: np.ndarray):
+        """Visualize the error indicator field."""
+        import matplotlib.pyplot as plt
+        
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        # Create coordinate arrays
+        nx = error_indicator.shape[1]
+        ny = error_indicator.shape[0]
+        x = np.linspace(0, self.domain_hi[0], nx)
+        y = np.linspace(0, self.domain_hi[1], ny)
+        X, Y = np.meshgrid(x, y)
+        
+        # Plot error indicator
+        im = ax.contourf(X, Y, error_indicator, levels=50, cmap='viridis')
+        plt.colorbar(im, ax=ax, label='Error Indicator (|∇T|)')
+        
+        # Add threshold line
+        threshold = self.config.get('refine_threshold', 100.0) / (self.refinement_ratio ** level)
+        ax.contour(X, Y, error_indicator, levels=[threshold], colors='red', linewidths=2)
+        
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        ax.set_title(f'Error Indicator at Level {level} (threshold = {threshold:.1f})')
+        ax.set_aspect('equal')
+        
+        plt.show()
+
+
+    def _print_temperature_stats(self, level: int):
+        """Print temperature statistics for a level."""
+        if level >= len(self.levels):
+            return
+            
+        level_data = self.levels[level]
+        solver = self.level_solvers[level]
+        
+        # Sync AMReX to solver to get accurate stats
+        self._sync_amrex_to_solver(level)
+        
+        T_interior = solver.mesh.extract_interior(solver.T)
+        
+        print(f"\nLevel {level} temperature statistics:")
+        print(f"  Grid: {solver.mesh.nx}×{solver.mesh.ny} cells")
+        print(f"  Cell size: Δx={solver.mesh.dx:.3e} m, Δy={solver.mesh.dy:.3e} m")
+        print(f"  Temperature: min={np.min(T_interior):.1f} K, max={np.max(T_interior):.1f} K, "
+              f"mean={np.mean(T_interior):.1f} K")
+
+
+    def _print_adaptation_summary(self):
+        """Print summary of the adapted grid."""
+        print("\n" + "-"*60)
+        print("AMReX AMR Grid Adaptation Summary")
+        print("-"*60)
+        
+        total_cells = 0
+        for level in range(len(self.levels)):
+            level_cells = self.get_level_cell_count(level)
+            total_cells += level_cells
+            print(f"Level {level}: {level_cells:,} cells "
+                  f"(refinement ratio: {self.refinement_ratio**level})")
+        
+        # Compute efficiency
+        base_cells = self.n_cell_base[0] * self.n_cell_base[1]
+        uniform_fine_cells = base_cells * (self.refinement_ratio ** (2 * (len(self.levels) - 1)))
+        efficiency = (uniform_fine_cells - total_cells) / uniform_fine_cells * 100 if uniform_fine_cells > 0 else 0
+        
+        print(f"\nTotal cells: {total_cells:,}")
+        print(f"Equivalent uniform fine grid: {uniform_fine_cells:,} cells")
+        print(f"Memory savings: {efficiency:.1f}%")
+        print("-"*60)
         
     def __del__(self):
         """Cleanup AMReX resources."""

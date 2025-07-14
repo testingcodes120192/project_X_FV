@@ -49,8 +49,14 @@ class SimpleAMRRefactored(BaseAMR):
         # Time synchronization
         self.time_ratios = [self.refinement_ratio**level for level in range(self.max_levels)]
         
+        # Workflow control
+        self.initial_levels = config.get('initial_levels', 1)
+        self.adapt_after_ic = config.get('adapt_after_ic', True)
+        self.base_initialized = False
+        self.adapted = False
+        
     def initialize(self):
-        """Initialize the AMR hierarchy."""
+        """Initialize only the base grid structure."""
         # Initialize refinement flags for base level
         self.refinement_flags = {
             level: np.zeros((self.base_solver.mesh.ny // (self.refinement_ratio**level),
@@ -62,9 +68,12 @@ class SimpleAMRRefactored(BaseAMR):
         # Initially no refined patches
         self.patches = {level: [] for level in range(self.max_levels)}
         
-        # Do initial refinement if needed
-        if self.config.get('initial_refinement', True):
-            self.initial_refinement()
+        # Mark as initialized but not adapted
+        self.base_initialized = True
+        self.adapted = False
+        
+        print(f"Simple AMR initialized with base level only ({self.base_solver.mesh.nx}×{self.base_solver.mesh.ny} cells)")
+        print("Ready for initial condition setup")
             
     def initial_refinement(self):
         """Perform initial refinement based on initial conditions."""
@@ -100,6 +109,82 @@ class SimpleAMRRefactored(BaseAMR):
             
         return self.refinement_flags[level]
     
+    def adapt_to_initial_condition(self):
+        """Adapt the grid based on the current solution in the base solver."""
+        if not self.base_initialized:
+            raise RuntimeError("Base grid not initialized. Call initialize() first.")
+            
+        if self.adapted:
+            print("Grid already adapted")
+            return
+            
+        print("\n" + "="*60)
+        print("Adapting Simple AMR grid to initial condition")
+        print("="*60)
+        
+        # Print initial statistics
+        T_interior = self.base_solver.mesh.extract_interior(self.base_solver.T)
+        print(f"\nBase level temperature statistics:")
+        print(f"  Min: {np.min(T_interior):.1f} K")
+        print(f"  Max: {np.max(T_interior):.1f} K")
+        print(f"  Mean: {np.mean(T_interior):.1f} K")
+        
+        # Perform initial refinement based on actual data
+        levels_created = 0
+        
+        for level in range(self.max_levels - 1):
+            print(f"\nChecking level {level} for refinement...")
+            
+            # Flag cells based on actual temperature data
+            flags = self.flag_cells_for_refinement(level)
+            
+            if np.any(flags):
+                flagged_count = np.sum(flags)
+                print(f"  Flagged {flagged_count} cells for refinement")
+                
+                # Create patches
+                self.regrid(level)
+                levels_created += 1
+                
+                # Print patch statistics
+                patch_count = len(self.patches[level + 1])
+                print(f"  Created {patch_count} patches at level {level + 1}")
+            else:
+                print(f"  No refinement needed at level {level}")
+                break
+                
+        self.adapted = True
+        print(f"\nGrid adaptation complete!")
+        print(f"  Created {levels_created} refined levels")
+        
+        # Print summary
+        self._print_adaptation_summary()
+    
+    def _print_adaptation_summary(self):
+        """Print summary of the adapted grid."""
+        print("\n" + "-"*60)
+        print("Simple AMR Grid Adaptation Summary")
+        print("-"*60)
+        
+        total_cells = 0
+        for level in range(self.max_levels):
+            level_cells = self.get_level_cell_count(level)
+            if level_cells > 0:
+                total_cells += level_cells
+                print(f"Level {level}: {level_cells:,} cells")
+                if level > 0:
+                    print(f"  Patches: {len(self.patches[level])}")
+        
+        # Compute efficiency
+        base_cells = self.base_solver.mesh.nx * self.base_solver.mesh.ny
+        uniform_fine_cells = base_cells * (self.refinement_ratio ** (2 * (self.max_levels - 1)))
+        efficiency = (uniform_fine_cells - total_cells) / uniform_fine_cells * 100 if uniform_fine_cells > 0 else 0
+        
+        print(f"\nTotal cells: {total_cells:,}")
+        print(f"Equivalent uniform fine grid: {uniform_fine_cells:,} cells")
+        print(f"Memory savings: {efficiency:.1f}%")
+        print("-"*60)
+    
     def compute_error_indicator(self, field, mesh):
         """
         Compute error indicator for refinement criterion.
@@ -109,16 +194,15 @@ class SimpleAMRRefactored(BaseAMR):
         # Compute gradient magnitude
         grad_mag = mesh.compute_gradient_magnitude(field)
         
-        # Scale by cell size (smaller cells need less refinement)
-        cell_size = np.sqrt(mesh.dx * mesh.dy)
-        scaled_error = grad_mag * cell_size
-        
-        # Also consider the temperature magnitude
+        # Also check temperature magnitude
         T_interior = mesh.extract_interior(field)
-        T_scale = np.maximum(T_interior - 300.0, 1.0)  # Above background
         
-        # Combined indicator
-        error_indicator = scaled_error * np.sqrt(T_scale / 1000.0)
+        # Only compute error where temperature is significant
+        temp_threshold = self.config.get('temp_threshold', 500.0)
+        significant = T_interior > temp_threshold
+        
+        # Set error to 0 where temperature is low
+        error_indicator = np.where(significant, grad_mag, 0.0)
         
         return error_indicator
     

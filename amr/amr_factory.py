@@ -3,6 +3,8 @@ from typing import Dict, Any, Optional
 import importlib
 import warnings
 
+from pyparsing import abstractmethod
+
 from .base_amr import BaseAMR
 
 class AMRFactory:
@@ -19,6 +21,22 @@ class AMRFactory:
         'simple': '.simple_amr_refactored',
         'amrex': '.amrex_amr'
     }
+    
+    @abstractmethod
+    def adapt_to_initial_condition(self):
+        """
+        Adapt the grid based on the initial condition set in the base solver.
+        
+        This method should:
+        1. Sync the initial condition from the base solver
+        2. Compute error indicators based on the actual data
+        3. Create refined levels where needed
+        4. Interpolate the solution to refined levels
+        
+        This is called after the initial condition has been set on the
+        base solver but before time stepping begins.
+        """
+        pass
     
     @classmethod
     def register_backend(cls, name: str, amr_class: type):
@@ -99,6 +117,9 @@ class AMRFactory:
         # Create and return the AMR instance
         amr_class = cls._backends[backend]
         amr_instance = amr_class(base_solver, config)
+        
+        # IMPORTANT: Only initialize the base grid structure
+        # The actual adaptation will happen after initial conditions are set
         amr_instance.initialize()
         
         return amr_instance
@@ -229,6 +250,7 @@ class AMRFactory:
                 'available': False
             }
     
+        
     @classmethod
     def get_backend_parameters(cls, backend: str) -> Dict[str, Any]:
         """
@@ -248,7 +270,13 @@ class AMRFactory:
         common_params = {
             'max_levels': 3,
             'refinement_ratio': 2,
-            'regrid_interval': 10
+            'regrid_interval': 10,
+            # Workflow parameters
+            'initial_levels': 1,
+            'adapt_after_ic': True,
+            'show_before_adapt': False,
+            'temp_threshold': 500.0,
+            'show_error_indicator': False
         }
         
         # Backend-specific parameters
@@ -263,7 +291,8 @@ class AMRFactory:
                 'blocking_factor': 8,
                 'n_error_buf': 2,
                 'grid_eff': 0.7,
-                'refine_threshold': 0.5,
+                'refine_threshold': 100.0,  # Changed from 0.5 to match gradient scale
+                'coarsen_threshold': 10.0,
                 'n_cell_coarsen': 2,
                 'subcycling': True,
                 'interpolation_type': 'pc_interp'  # piecewise constant
