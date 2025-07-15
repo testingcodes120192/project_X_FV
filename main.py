@@ -2675,6 +2675,57 @@ Time Integration:
         
         plt.tight_layout()
         plt.show()
+        
+    def setup_physics_based_amr(self):
+        """Setup AMR with physics-based refinement."""
+        # Create AMR configuration
+        amr_config = {
+            # Basic AMR parameters
+            'max_levels': self.var_max_levels.get(),
+            'refinement_ratio': self.var_refinement_ratio.get(),
+            'max_grid_size': 16,  # Smaller for better interface capture
+            'blocking_factor': 4,
+            'n_error_buf': 1,
+            'regrid_interval': self.var_regrid_interval.get(),
+            
+            # Physics-based refinement
+            'refine_mode': 'physics_based',
+            
+            # Gradient indicator settings
+            'gradient_factor': 2.0,  # How many std devs above mean
+            'use_gradient': True,
+            
+            # Curvature indicator settings  
+            'use_curvature': True,
+            'curvature_threshold': 0.5,
+            
+            # Jump indicator settings
+            'use_jump': True,
+            'jump_threshold': 0.3,
+            
+            # Coherence indicator (optional - more expensive)
+            'use_coherence': False,
+            'coherence_threshold': 0.8,
+            
+            # Interface buffer
+            'interface_buffer': 2,  # cells around interface
+            
+            # Thresholding strategy
+            'use_statistical_threshold': True,
+            'sigma_factor': 2.0,
+            'use_otsu_threshold': True,
+            'refine_threshold': 0.3,  # Fallback threshold
+            'threshold_combine': 'or',  # 'or', 'and', 'majority'
+            
+            # Morphological cleanup
+            'apply_morphology': True,
+            'dilation_iter': 1,
+            
+            # Visualization
+            'show_error_indicator': self.var_show_error.get(),
+        }
+    
+        return amr_config
 
 def main():
     """Main entry point."""

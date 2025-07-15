@@ -1587,74 +1587,97 @@ class AMReXAMR(BaseAMR):
     def _compute_error_indicator_from_data(self, level: int):
         """
         Compute error indicator from actual temperature data in MultiFab.
-        
-        Returns:
-            error_indicator: numpy array of error values (for visualization)
-            tagged_boxes: list of boxes that need refinement
+        Modified to support physics-based refinement.
         """
         level_data = self.levels[level]
         solver = self.level_solvers[level]
         
-        # Get refinement threshold
-        base_threshold = self.config.get('refine_threshold', 100.0)
-        threshold = base_threshold / (self.refinement_ratio ** level)
-        temp_threshold = self.config.get('temp_threshold', 500.0)
+        # Check refinement mode
+        refine_mode = self.config.get('refine_mode', 'gradient')
         
-        tagged_boxes = []
+        if refine_mode == 'physics_based':
+            # Use the new physics-based approach
+            from physics_amr import PhysicsBasedRefinement
+            
+            # Create refinement object with config
+            refiner = PhysicsBasedRefinement(self.config)
+            
+            # Compute physics-based indicator
+            error_indicator = refiner.compute_refinement_indicator(solver)
+            
+            # Convert to flags with adaptive thresholding
+            flags = self._apply_adaptive_thresholding(error_indicator)
+            
+        else:
+            # Original gradient-based approach
+            error_indicator = self._compute_gradient_indicator(solver)
+            threshold = self.config.get('refine_threshold', 10.0)
+            flags = error_indicator > threshold
         
-        # For visualization - create error indicator array
-        nx_level = self.n_cell_base[0] * (self.refinement_ratio ** level)
-        ny_level = self.n_cell_base[1] * (self.refinement_ratio ** level)
-        error_indicator = np.zeros((ny_level, nx_level))
+        # Convert flags to AMReX boxes
+        tagged_boxes = self._convert_flags_to_boxes(flags)
         
-        # Process each box in this level
-        for mfi in level_data.temperature:
-            bx = mfi.validbox()
-            temp_arr = level_data.temperature.array(mfi)
-            
-            lo = bx.small_end
-            hi = bx.big_end
-            
-            # Compute gradients for this box
-            box_needs_refinement = False
-            
-            for j in range(lo[1], hi[1] + 1):
-                for i in range(lo[0], hi[0] + 1):
-                    # Get temperature value
-                    T = temp_arr[i, j, 0, self.comp_T]
-                    
-                    # Skip if temperature is too low
-                    if T < temp_threshold:
-                        continue
-                    
-                    # Compute gradient using central differences
-                    if lo[0] < i < hi[0] and lo[1] < j < hi[1]:
-                        dTdx = (temp_arr[i+1, j, 0, self.comp_T] - 
-                               temp_arr[i-1, j, 0, self.comp_T]) / (2 * solver.mesh.dx)
-                        dTdy = (temp_arr[i, j+1, 0, self.comp_T] - 
-                               temp_arr[i, j-1, 0, self.comp_T]) / (2 * solver.mesh.dy)
-                        
-                        # Gradient magnitude
-                        grad_mag = np.sqrt(dTdx**2 + dTdy**2)
-                        
-                        # Store in error indicator array
-                        if 0 <= i < nx_level and 0 <= j < ny_level:
-                            error_indicator[j, i] = grad_mag
-                        
-                        # Check against threshold
-                        if grad_mag > threshold:
-                            box_needs_refinement = True
-            
-            # If this box needs refinement, add it to the list
-            if box_needs_refinement:
-                tagged_boxes.append(bx)
-        
-        print(f"  Error indicator stats: min={np.min(error_indicator):.2f}, "
-              f"max={np.max(error_indicator):.2f}, mean={np.mean(error_indicator):.2f}")
+        # Visualization if requested
+        if self.config.get('show_error_indicator', False):
+            self._visualize_error_indicator(level, error_indicator)
         
         return error_indicator, tagged_boxes
-
-
+    
+    def _apply_adaptive_thresholding(self, indicator: np.ndarray) -> np.ndarray:
+        """
+        Apply adaptive thresholding to refinement indicator.
+        Uses multiple strategies to identify interfaces.
+        """
+        # Method 1: Statistical threshold
+        if self.config.get('use_statistical_threshold', True):
+            mean = np.mean(indicator)
+            std = np.std(indicator)
+            stat_threshold = mean + self.config.get('sigma_factor', 2.0) * std
+            flags_stat = indicator > stat_threshold
+        else:
+            flags_stat = np.zeros_like(indicator, dtype=bool)
+        
+        # Method 2: Otsu's method (automatic threshold)
+        if self.config.get('use_otsu_threshold', True):
+            try:
+                from skimage.filters import threshold_otsu
+                if np.max(indicator) > np.min(indicator):
+                    otsu_threshold = threshold_otsu(indicator)
+                    flags_otsu = indicator > otsu_threshold
+                else:
+                    flags_otsu = np.zeros_like(indicator, dtype=bool)
+            except ImportError:
+                flags_otsu = np.zeros_like(indicator, dtype=bool)
+        else:
+            flags_otsu = np.zeros_like(indicator, dtype=bool)
+        
+        # Method 3: Fixed threshold
+        fixed_threshold = self.config.get('refine_threshold', 0.3)
+        flags_fixed = indicator > fixed_threshold
+        
+        # Combine methods
+        combine_method = self.config.get('threshold_combine', 'or')
+        if combine_method == 'or':
+            flags = flags_stat | flags_otsu | flags_fixed
+        elif combine_method == 'and':
+            flags = flags_stat & flags_otsu & flags_fixed
+        elif combine_method == 'majority':
+            flags = (flags_stat.astype(int) + flags_otsu.astype(int) + 
+                    flags_fixed.astype(int)) >= 2
+        else:
+            flags = flags_fixed
+        
+        # Apply morphological operations to clean up
+        if self.config.get('apply_morphology', True):
+            from scipy.ndimage import binary_dilation, binary_closing
+            # Close small gaps
+            flags = binary_closing(flags, iterations=1)
+            # Ensure minimum patch size
+            flags = binary_dilation(flags, iterations=self.config.get('dilation_iter', 1))
+        
+        return flags
+    
+    
     def _visualize_error_indicator(self, level: int, error_indicator: np.ndarray):
         """Visualize the error indicator field."""
         import matplotlib.pyplot as plt

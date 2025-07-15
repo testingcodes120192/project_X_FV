@@ -1,9 +1,11 @@
+PS C:\Research\codes\FR\HMX\experiment_IC_integrated_diffusion\project_X_FV> tree /f
 Folder PATH listing
 Volume serial number is 08FB-63BB
 C:.
 │   .gitattributes
 │   .gitignore
 │   animation.py
+│   Backtrace.0.0
 │   config_fv.ini
 │   image_tools.py
 │   initial_conditions.py
@@ -13,6 +15,7 @@ C:.
 │   README.md
 │   requirements.txt
 │   solver.py
+│   tree.txt
 │   weno.py
 │   __init__.py
 │
@@ -38,14 +41,29 @@ C:.
 │       0.png
 │       1.png
 │       2.png
+│       amrex_1.png
+│       amr_parameters.png
+│       amr_res_1.png
+│       amr_stat_1.png
+│       amr_stat_2.png
 │       B1.png
 │       B2.png
+│       error_amr.png
+│       mesh_1.png
+│       mesh_1_amr.png
+│       mesh_2_amr.png
+│       mesh_3_amr.png
+│       mesh_4_amr.png
+│       run1_l1.png
+│       run1_l2.png
+│       target.png
 │
 └───__pycache__
         animation.cpython-311.pyc
         animation.cpython-312.pyc
         initial_conditions.cpython-311.pyc
         initial_conditions.cpython-312.pyc
+        main.cpython-312.pyc
         mesh.cpython-311.pyc
         mesh.cpython-312.pyc
         postprocessor.cpython-311.pyc
